@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// Every device signs in anonymously. Access to an event comes from knowing its
+// join code: a device becomes a member by writing members/{its uid} with a code
+// that maps to that event. Members can read the event and add sales to it.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+    function isMember(eventId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/events/$(eventId)/members/$(request.auth.uid));
+    }
+    function isCreator(eventId) {
+      return signedIn()
+        && get(/databases/$(database)/documents/events/$(eventId)).data.createdBy == request.auth.uid;
+    }
+
+    // Join codes. Single lookups only (no listing), so codes can't be enumerated.
+    // A code can be created once, by the event's creator, and never changed.
+    match /codes/{code} {
+      allow get: if signedIn();
+      allow create: if signedIn()
+        && code.size() == 6
+        && isCreator(request.resource.data.eventId);
+    }
+
+    match /events/{eventId} {
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.items is list
+        && request.resource.data.items.size() <= 200;
+      allow get: if isMember(eventId)
+        || (signedIn() && resource.data.createdBy == request.auth.uid);
+      // Members may edit the name and price list; createdBy and code are fixed once set.
+      allow update: if (isMember(eventId) || (signedIn() && resource.data.createdBy == request.auth.uid))
+        && request.resource.data.createdBy == resource.data.createdBy
+        && (resource.data.code == '' || request.resource.data.code == resource.data.code)
+        && request.resource.data.items.size() <= 200;
+
+      match /members/{uid} {
+        allow read: if isMember(eventId);
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.eventId == eventId;
+      }
+
+      // Sales can be added and voided, never edited or deleted.
+      match /sales/{saleId} {
+        allow read: if isMember(eventId);
+        allow create: if isMember(eventId)
+          && request.resource.data.id == saleId
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.total is int
+          && request.resource.data.total >= 0
+          && request.resource.data.lines.size() <= 100;
+        allow update: if isMember(eventId)
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedAt']);
+      }
+    }
+  }
+}
