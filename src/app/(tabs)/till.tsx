@@ -1,15 +1,32 @@
-import { useMemo, useState } from 'react';
+import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
+import { useFocusEffect } from 'expo-router';
+import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { Body, Button, Card, Label, s, useTheme } from '@/components/ui';
+import { saleFeedback, tapFeedback } from '@/lib/haptics';
 import { CASH_BUTTONS, cashLabel, formatPence } from '@/lib/money';
 import { useStore } from '@/lib/store';
 import type { SaleLine } from '@/lib/types';
+
+const KEEP_AWAKE_TAG = 'till';
 
 export default function Till() {
   const t = useTheme();
   const { items, recordSale } = useStore();
   const { width } = useWindowDimensions();
   const wide = width >= 760; // tablets: items left, sale panel right
+  const narrow = width < 380; // small phones (iPhone SE, older Androids)
+
+  // Keep the screen on while the Till tab is showing, so the phone doesn't lock
+  // between customers. Tabs stay mounted, so this follows focus, not mount.
+  useFocusEffect(
+    useCallback(() => {
+      activateKeepAwakeAsync(KEEP_AWAKE_TAG).catch(() => {});
+      return () => {
+        deactivateKeepAwake(KEEP_AWAKE_TAG).catch(() => {});
+      };
+    }, []),
+  );
 
   const [cart, setCart] = useState<Record<string, number>>({});
   const [tendered, setTendered] = useState(0);
@@ -27,6 +44,7 @@ export default function Till() {
   const change = tendered - total;
 
   const add = (id: string, d: number) => {
+    tapFeedback();
     setLastMessage(null);
     setCart((c) => {
       const q = (c[id] ?? 0) + d;
@@ -42,6 +60,7 @@ export default function Till() {
   };
   const complete = (method: 'cash' | 'card') => {
     recordSale(lines, method, tendered);
+    saleFeedback();
     setLastMessage(method === 'cash' ? `Saved. Give ${formatPence(change)} change.` : `Card sale saved: ${formatPence(total)}.`);
     clear();
   };
@@ -99,8 +118,9 @@ export default function Till() {
         <Body muted>{lastMessage ?? 'Tap items to add them.'}</Body>
       ) : (
         lines.map((l) => (
-          <View key={l.itemId} style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <Text numberOfLines={1} style={{ flex: 1, color: t.ink, fontSize: 16 }}>{l.name}</Text>
+          // Narrow phones: the name gets its own row so it isn't cut down to a few letters.
+          <View key={l.itemId} style={{ flexDirection: 'row', flexWrap: narrow ? 'wrap' : 'nowrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, rowGap: 4 }}>
+            <Text numberOfLines={narrow ? 2 : 1} style={{ flexGrow: 1, flexShrink: 1, flexBasis: narrow ? '100%' : 0, color: t.ink, fontSize: 16 }}>{l.name}</Text>
             <Stepper label="One less" sign="−" onPress={() => add(l.itemId, -1)} />
             <Text style={[s.num, { color: t.ink, minWidth: 22, textAlign: 'center', fontWeight: '700' }]}>{l.qty}</Text>
             <Stepper label="One more" sign="+" onPress={() => add(l.itemId, 1)} />

@@ -63,9 +63,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [syncError, setSyncError] = useState<string | null>(null);
 
-  // Refs let async sync code read the latest state without stale closures.
+  // The ref is the source of truth for async sync code, which must read the latest
+  // state without stale closures. Every change goes through `update`, which writes
+  // the ref first and then hands the same value to React.
   const stateRef = useRef(state);
-  stateRef.current = state;
   const flushing = useRef(false);
   const memberOk = useRef<string | null>(null); // eventId we've confirmed membership for this run
 
@@ -79,13 +80,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // Corrupt or unreadable storage: start fresh rather than crash at the till.
       }
-      setState({
+      const initial: Persisted = {
         deviceId: saved.deviceId || randomUUID(),
         session: saved.session ?? null,
         items: saved.items ?? [],
         sales: saved.sales ?? {},
-        outbox: saved.outbox ?? [],
-      });
+        // Local-only events never send, so drop anything an older build queued for them.
+        outbox: saved.session?.mode === 'cloud' ? (saved.outbox ?? []) : [],
+      };
+      stateRef.current = initial;
+      setState(initial);
       setLoaded(true);
     })();
   }, []);
@@ -96,11 +100,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, [state, loaded]);
 
   const update = useCallback((fn: (s: Persisted) => Persisted) => {
-    setState((prev) => {
-      const next = fn(prev);
-      stateRef.current = next;
-      return next;
-    });
+    // Apply to the ref first, synchronously. The sync loop reads the ref straight
+    // after each send, so it must not depend on when React next renders.
+    const next = fn(stateRef.current);
+    stateRef.current = next;
+    setState(next);
   }, []);
 
   // ---- sync -----------------------------------------------------------------
@@ -132,8 +136,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const enqueue = useCallback(
     (op: OutboxOp) => {
+      // Local-only events have nowhere to send to, so nothing is queued.
+      if (stateRef.current.session?.mode !== 'cloud') return;
       update((s) => ({ ...s, outbox: [...s.outbox, op] }));
-      if (stateRef.current.session?.mode === 'cloud') setTimeout(flush, 0);
+      setTimeout(flush, 0);
     },
     [update, flush],
   );
@@ -142,11 +148,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const sessionKey = state.session ? `${state.session.mode}:${state.session.eventId}` : '';
   useEffect(() => {
     const session = stateRef.current.session;
-    if (!loaded || !session) return;
-    if (session.mode === 'local') {
-      setSyncStatus('local');
-      return;
-    }
+    if (!loaded || !session || session.mode === 'local') return;
     flush();
     const timer = setInterval(flush, FLUSH_INTERVAL_MS);
     let unsub: (() => void) | undefined;
@@ -176,6 +178,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         () => setSyncStatus('waiting'),
       );
     } catch {
+      // Couldn't even start listening (Firebase misconfigured). Reported the same
+      // way as a listener error, which arrives through the callback above.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setSyncStatus('waiting');
     }
     return () => {
@@ -285,7 +290,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       ...state,
       loaded,
       cloudEnabled,
-      syncStatus,
+      syncStatus: state.session?.mode === 'cloud' ? syncStatus : 'local',
       syncError,
       startLocalEvent,
       createCloudEvent,

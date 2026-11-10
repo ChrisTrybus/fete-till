@@ -1,5 +1,5 @@
 import { randomUUID } from 'expo-crypto';
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, s, useTheme } from '@/components/ui';
 import { formatPence, parsePounds, parsePriceList } from '@/lib/money';
@@ -14,18 +14,16 @@ const toDraft = (items: { id: string; name: string; price: number }[]): Draft[] 
 export default function PriceList() {
   const t = useTheme();
   const { items, setItems, session } = useStore();
-  const [draft, setDraft] = useState<Draft[]>(() => toDraft(items));
-  const [dirty, setDirty] = useState(false);
+  // Unsaved edits on this phone. While there are none, the list shown is the shared
+  // one, so edits made on another till appear straight away.
+  const [edited, setEdited] = useState<Draft[] | null>(null);
+  const dirty = edited !== null;
+  const draft = edited ?? toDraft(items);
+  const setDraft = (fn: (d: Draft[]) => Draft[]) => setEdited((d) => fn(d ?? toDraft(items)));
   const [paste, setPaste] = useState('');
   const [message, setMessage] = useState<string | null>(null);
 
-  // Pick up edits made on another till, unless this phone has unsaved changes.
-  useEffect(() => {
-    if (!dirty) setDraft(toDraft(items));
-  }, [items, dirty]);
-
   const edit = (id: string, patch: Partial<Draft>) => {
-    setDirty(true);
     setMessage(null);
     setDraft((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
@@ -33,7 +31,7 @@ export default function PriceList() {
 
   const save = () => {
     setItems(draft.map((d) => ({ id: d.id, name: d.name.trim(), price: parsePounds(d.price)! })));
-    setDirty(false);
+    setEdited(null);
     setMessage(session?.mode === 'cloud' ? 'Price list saved. Other tills will update when they have signal.' : 'Price list saved.');
   };
 
@@ -43,8 +41,7 @@ export default function PriceList() {
       setMessage('No lines matched. Use one item per line, like "Tea, 0.80".');
       return;
     }
-    setDraft(parsed.map((p) => ({ id: randomUUID(), name: p.name, price: (p.price / 100).toFixed(2) })));
-    setDirty(true);
+    setEdited(parsed.map((p) => ({ id: randomUUID(), name: p.name, price: (p.price / 100).toFixed(2) })));
     setPaste('');
     setMessage(
       `${parsed.length} items loaded. Check them, then tap Save.` + (skipped.length ? ` Skipped: ${skipped.join('; ')}` : ''),
@@ -60,19 +57,16 @@ export default function PriceList() {
             const bad = !d.name.trim() || parsePounds(d.price) === null;
             return (
               <View key={d.id} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                <Field value={d.name} onChangeText={(name) => edit(d.id, { name })} placeholder="Item" style={{ flex: 1 }} />
+                <Field value={d.name} onChangeText={(name) => edit(d.id, { name })} placeholder="Item" style={{ flex: 1, minWidth: 0 }} />
                 <Field
                   value={d.price}
                   onChangeText={(price) => edit(d.id, { price })}
                   keyboardType="decimal-pad"
                   accessibilityLabel={`Price of ${d.name} in pounds`}
-                  style={[s.num, { width: 96, textAlign: 'right', borderColor: bad ? t.danger : t.line }]}
+                  style={[s.num, { width: 84, textAlign: 'right', borderColor: bad ? t.danger : t.line }]}
                 />
                 <Pressable
-                  onPress={() => {
-                    setDirty(true);
-                    setDraft((x) => x.filter((y) => y.id !== d.id));
-                  }}
+                  onPress={() => setDraft((x) => x.filter((y) => y.id !== d.id))}
                   accessibilityRole="button"
                   accessibilityLabel={`Remove ${d.name}`}
                   hitSlop={8}
@@ -85,10 +79,7 @@ export default function PriceList() {
           })}
           <Button
             title="Add item"
-            onPress={() => {
-              setDirty(true);
-              setDraft((d) => [...d, { id: randomUUID(), name: '', price: '' }]);
-            }}
+            onPress={() => setDraft((d) => [...d, { id: randomUUID(), name: '', price: '' }])}
           />
           <Button title="Save price list" kind="primary" disabled={!dirty || invalid.length > 0} onPress={save} />
           {invalid.length > 0 && <Body muted>Each item needs a name and a price like 1.50.</Body>}

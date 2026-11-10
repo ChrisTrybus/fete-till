@@ -9,19 +9,30 @@
 - Day total by cash/card, till and item; voids; CSV export through the share sheet.
 - Local-only mode when Firebase isn't configured.
 
-## Not yet verified
-
-- The app has been typechecked and bundled for Android, but not run on a device.
-- `firestore.rules` has not been run against the Firebase emulator. Phase 1 adds tests.
-
 ## Phase 1: make it trustworthy (before a real event)
 
-1. Run on iOS and Android devices; fix layout issues on small phones and tablets.
-2. Rules tests with `@firebase/rules-unit-testing` and the emulator: non-members can't read an event, a sale can't be edited, codes can't be listed.
-3. Sync tests: aeroplane mode for a whole sale session, then reconnect. Kill the app with unsent sales and confirm they survive.
-4. Haptic feedback on item taps and sale completion (`expo-haptics`).
-5. Keep the screen awake on the Till tab (`expo-keep-awake`).
-6. App icon, splash screen and store screenshots.
+Done:
+
+- Sync tests (`npm test`): a whole sale session with no signal then reconnecting, signal dropping part-way through a send, and the app being killed with unsent sales. These run the real store against a fake Firestore, so they cover the outbox and device storage, not the network itself.
+- Rules tests written (`npm run test:rules`): non-members can't read an event, a sale can't be edited or deleted, codes can't be listed, plus joining, voiding and price-list edits.
+- Haptic feedback on item taps and sale completion (`expo-haptics`).
+- Screen stays awake while the Till tab is showing (`expo-keep-awake`).
+- App icon, Android adaptive icon and splash screen (`npm run icons` redraws them).
+- Layout checked in a browser at 320, 600, 768, 820 and 1024 px wide. Fixed: sale lines cut off on small phones, the price list overflowing its card, bunting stopping short on tablets.
+- Lint set up (`npx expo lint`) and clean.
+
+Fixed along the way:
+
+- The send loop relied on React re-rendering between sends to see that a sale had been sent. It now updates its own state directly.
+- Local-only events queued every sale for a sync that never happens, and the Event tab warned about "unsent changes". They no longer queue anything.
+
+Still to do:
+
+1. Run the rules tests. They need the Firestore emulator, which needs Java (JDK 21 or later). They have not been run yet.
+2. Run on real iOS and Android devices. The browser check doesn't cover safe areas, the keyboard, large system font sizes, haptics or keep-awake.
+3. On two real phones: aeroplane mode for a sale session then reconnect, and force-quit with unsent sales. The automated tests cover the app's logic; this checks Firestore and the OS.
+4. Store screenshots (take these from the device run).
+5. Decide what happens when the server permanently refuses a queued change (for example a price list over 200 items). Today it stays at the front of the outbox and blocks every sale behind it.
 
 ## Phase 2: organiser features
 

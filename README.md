@@ -37,6 +37,17 @@ Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
    ```
 7. Restart with `npx expo start --clear`.
 
+## Testing
+
+```bash
+npm test              # money, day totals, and offline sync / app-kill tests
+npm run test:rules    # Firestore security rules, against the local emulator
+npx expo lint
+npx tsc --noEmit
+```
+
+`npm run test:rules` starts the Firestore emulator, which needs Java (JDK 21 or later) installed. It uses a throwaway demo project, so it never touches your real Firebase data.
+
 ## Building for the stores
 
 Builds and submission use EAS (Expo's cloud build service), so you don't need a local Xcode or Android Studio.
@@ -66,6 +77,10 @@ src/lib/cloud.ts         Firestore reads and writes
 src/lib/firebase.ts      Firebase setup and anonymous sign-in
 src/lib/totals.ts        day-total maths and CSV
 src/lib/money.ts         pence formatting and price-list parsing
+src/lib/haptics.ts       touch feedback on the till
+src/lib/__tests__/       unit and sync tests
+tests/rules/             security rules tests
+scripts/make-icons.js    draws the app icon and splash image
 firestore.rules          who can read and write what
 ```
 

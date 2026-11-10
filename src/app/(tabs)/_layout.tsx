@@ -49,7 +49,9 @@ function Header() {
 export default function TabsLayout() {
   const t = useTheme();
   const { loaded, session } = useStore();
-  if (loaded && !session) return <Redirect href="/" />;
+  // Wait for saved state before mounting any tab, so screens never start from empty data.
+  if (!loaded) return <View style={{ flex: 1, backgroundColor: t.bg }} />;
+  if (!session) return <Redirect href="/" />;
   return (
     <Tabs
       screenOptions={{
