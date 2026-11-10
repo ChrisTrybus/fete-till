@@ -20,6 +20,7 @@ jest.mock('../cloud', () => ({
   createEvent: jest.fn(),
   joinEvent: jest.fn(),
   joinAsMember: jest.fn(),
+  claimOrganiser: jest.fn(),
   pushOp: jest.fn(),
   saleExists: jest.fn(),
   watchEvent: jest.fn(),
@@ -73,20 +74,22 @@ async function sell(method: 'cash' | 'card' = 'cash') {
 
 const persisted = async () => JSON.parse((await AsyncStorage.getItem(STORAGE_KEY)) ?? '{}');
 const pushedOps = () => cloud.pushOp.mock.calls.map(([, op]) => op);
-const opKey = (op: OutboxOp) => (op.kind === 'sale' ? `sale:${op.sale.id}` : op.kind === 'void' ? `void:${op.saleId}` : 'items');
+const opKey = (op: OutboxOp) => (op.kind === 'sale' ? `sale:${op.sale.id}` : op.kind === 'void' ? `void:${op.saleId}` : op.kind);
 
 let onRemoteSales: (sales: Sale[]) => void;
-let onRemoteEvent: (e: { name: string; items: Item[] }) => void;
+let onRemoteEvent: (e: { name: string; items: Item[]; closedAt?: number | null }) => void;
 
 beforeEach(async () => {
   jest.useFakeTimers();
   jest.clearAllMocks();
   await AsyncStorage.clear();
   goOnline();
-  cloud.createEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234' });
+  cloud.createEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', organiserCode: 'QRSTUVWX' });
+  cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [] });
+  cloud.claimOrganiser.mockResolvedValue(undefined);
   cloud.saleExists.mockResolvedValue(false);
   cloud.watchEvent.mockImplementation((_id, onEvent, onSales) => {
-    onRemoteEvent = onEvent;
+    onRemoteEvent = (e) => onEvent({ closedAt: null, ...e });
     onRemoteSales = onSales;
     return () => {};
   });
@@ -441,5 +444,221 @@ describe('a change the event refuses', () => {
     expect(store.parked.map((p) => opKey(p.op))).toEqual([`sale:${bad.id}`]);
     expect(store.sales[bad.id]).toMatchObject({ total: 160 });
     expect(store.syncStatus).toBe('attention');
+  });
+});
+
+describe('the organiser role', () => {
+  const refusal = () => Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+
+  async function launchAsVolunteer() {
+    const view = await launch();
+    await act(() => store.joinCloudEvent('ABC234', 'Tombola'));
+    await settle();
+    return view;
+  }
+
+  test('the phone that starts an event is its organiser and holds the organiser code', async () => {
+    await launchInCloudEvent();
+
+    expect(store.isOrganiser).toBe(true);
+    expect(store.session?.organiserCode).toBe('QRSTUVWX');
+  });
+
+  test('a phone that joins with the join code is not an organiser', async () => {
+    await launchAsVolunteer();
+
+    expect(store.isOrganiser).toBe(false);
+    expect(cloud.claimOrganiser).not.toHaveBeenCalled();
+  });
+
+  test('a this-phone-only event has no one else to be organiser', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+
+    expect(store.isOrganiser).toBe(true);
+  });
+
+  test('entering the organiser code makes a joined phone an organiser, and it lasts through a restart', async () => {
+    const firstRun = await launchAsVolunteer();
+
+    await act(() => store.claimOrganiser('qrst uvwx'));
+
+    expect(cloud.claimOrganiser).toHaveBeenCalledWith('ev1', 'QRSTUVWX');
+    expect(store.isOrganiser).toBe(true);
+
+    await firstRun.unmount();
+    cloud.claimOrganiser.mockClear();
+    await launch();
+
+    expect(store.isOrganiser).toBe(true);
+    // A restart may bring a new anonymous user, so the role is claimed again.
+    expect(cloud.claimOrganiser).toHaveBeenCalledWith('ev1', 'QRSTUVWX');
+  });
+
+  test('a wrong organiser code is turned down with a clear message', async () => {
+    await launchAsVolunteer();
+    cloud.claimOrganiser.mockRejectedValue(refusal());
+
+    let error: unknown;
+    await act(async () => {
+      await store.claimOrganiser('WRONGWRO').catch((e) => (error = e));
+    });
+
+    expect((error as Error).message).toMatch(/organiser code/i);
+    expect(store.isOrganiser).toBe(false);
+  });
+
+  test('no signal while entering the code is not reported as a wrong code', async () => {
+    await launchAsVolunteer();
+    cloud.claimOrganiser.mockRejectedValue(new Error('timeout'));
+
+    let error: unknown;
+    await act(async () => {
+      await store.claimOrganiser('QRSTUVWX').catch((e) => (error = e));
+    });
+
+    expect((error as Error).message).toBe('timeout');
+    expect(store.isOrganiser).toBe(false);
+  });
+
+  test('a stored code the event no longer accepts drops the role, and sales still send', async () => {
+    const firstRun = await launchInCloudEvent();
+    await firstRun.unmount();
+    cloud.claimOrganiser.mockRejectedValue(refusal());
+    await launch();
+
+    expect(store.isOrganiser).toBe(false);
+    await sell();
+    expect(store.outbox).toHaveLength(0);
+    expect(store.syncStatus).toBe('synced');
+  });
+
+  test('a volunteer’s void of another till’s sale is set aside, saying why', async () => {
+    await launchAsVolunteer();
+    const theirs: Sale = { id: 'theirs', at: 1, total: 160, method: 'cash', tendered: 200, lines: TEA, tillName: 'Cake stall', deviceId: 'other-phone', voided: false };
+    await act(async () => onRemoteSales([theirs]));
+    cloud.pushOp.mockImplementation(async (_id, op) => {
+      if (op.kind === 'void') throw refusal();
+    });
+
+    await act(async () => store.setVoided('theirs', true));
+    await settle();
+
+    expect(store.parked.map((p) => opKey(p.op))).toEqual(['void:theirs']);
+    expect(store.parked[0].reason).toMatch(/only the organiser/i);
+  });
+});
+
+describe('closing the event', () => {
+  const refusal = () => Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+  const fete = { name: 'Summer Fete', items: [] as Item[] };
+
+  test('closing is sent to the other tills, and reopening undoes it', async () => {
+    await launchInCloudEvent();
+
+    await act(async () => store.setClosed(true));
+    await settle();
+
+    const closedAt = store.session?.closedAt;
+    expect(closedAt).toEqual(expect.any(Number));
+    expect(pushedOps().at(-1)).toEqual({ kind: 'close', closedAt });
+    expect(store.outbox).toHaveLength(0);
+
+    await act(async () => store.setClosed(false));
+    await settle();
+
+    expect(store.session?.closedAt).toBeNull();
+    expect(pushedOps().at(-1)).toEqual({ kind: 'close', closedAt: null });
+  });
+
+  test('a till hears that the organiser closed the event, and that it reopened', async () => {
+    await launchInCloudEvent();
+
+    await act(async () => onRemoteEvent({ ...fete, closedAt: 1700000000000 }));
+    expect(store.session?.closedAt).toBe(1700000000000);
+
+    await act(async () => onRemoteEvent({ ...fete, closedAt: null }));
+    expect(store.session?.closedAt).toBeNull();
+  });
+
+  test('closing with no signal holds on this phone, survives a restart, and sends after the sales before it', async () => {
+    const firstRun = await launchInCloudEvent();
+    goOffline();
+    const sale = await sell();
+    await act(async () => store.setClosed(true));
+    await settle();
+
+    // The server still says open; that must not undo a close that is waiting to send.
+    await act(async () => onRemoteEvent({ ...fete, closedAt: null }));
+    expect(store.session?.closedAt).toEqual(expect.any(Number));
+
+    await firstRun.unmount();
+    await launch();
+    expect(store.session?.closedAt).toEqual(expect.any(Number));
+
+    cloud.pushOp.mockClear();
+    goOnline();
+    await settle(15_000);
+
+    expect(pushedOps().map(opKey)).toEqual([`sale:${sale.id}`, 'close']);
+    expect(store.outbox).toHaveLength(0);
+  });
+
+  test('closing then reopening before either is sent sends only the latest choice', async () => {
+    await launchInCloudEvent();
+    goOffline();
+    await act(async () => store.setClosed(true));
+    await act(async () => store.setClosed(false));
+    await settle();
+
+    expect(store.outbox).toEqual([{ kind: 'close', closedAt: null }]);
+  });
+
+  test('a close the event refuses is set aside, and discarding it goes back to what the other tills see', async () => {
+    await launch();
+    await act(() => store.joinCloudEvent('ABC234', 'Tombola'));
+    await settle();
+    cloud.pushOp.mockImplementation(async (_id, op) => {
+      if (op.kind === 'close') throw refusal();
+    });
+
+    await act(async () => store.setClosed(true));
+    await settle();
+
+    expect(store.parked.map((p) => opKey(p.op))).toEqual(['close']);
+    expect(store.parked[0].reason).toMatch(/only the organiser/i);
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.session?.closedAt).toBeNull();
+  });
+
+  test('a sale that reaches a closed event from a till with no signal is still sent', async () => {
+    await launchInCloudEvent();
+    goOffline();
+    const sale = await sell();
+    await act(async () => onRemoteEvent({ ...fete, closedAt: Date.now() }));
+
+    cloud.pushOp.mockClear();
+    goOnline();
+    await settle(15_000);
+
+    expect(pushedOps().map(opKey)).toEqual([`sale:${sale.id}`]);
+    expect(store.outbox).toHaveLength(0);
+  });
+
+  test('a this-phone-only event can be closed and reopened, with nothing queued', async () => {
+    const firstRun = await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    await act(async () => store.setClosed(true));
+    await firstRun.unmount();
+    await launch();
+
+    expect(store.session?.closedAt).toEqual(expect.any(Number));
+    expect(store.outbox).toEqual([]);
+
+    await act(async () => store.setClosed(false));
+    expect(store.session?.closedAt).toBeNull();
   });
 });

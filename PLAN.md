@@ -36,8 +36,21 @@ Still to do:
 
 ## Phase 2: organiser features
 
-1. Organiser role: only the event creator can edit the price list or void other tills' sales. Needs the creator to survive reinstalls (sign in with Apple/Google or an organiser PIN).
-2. Close the event: lock new sales and produce an end-of-day summary that can be emailed or shared as a PDF.
+Done:
+
+- Organiser role. Only an organiser can edit the price list or void another till's sales; a till can still void its own. Starting an event makes an 8-character organiser code, shown on that phone's Event tab. Entering it on the Event tab of another phone (or after a reinstall) makes that phone an organiser too, so no accounts are needed. The code is checked by the security rules and can't be read back by any device. A this-phone-only event has no restrictions.
+- Close the event. An organiser closes it on the Event tab (and can reopen it). Every till then shows "This event is closed" instead of the till, and Day total gains an end-of-day summary that can be shared as text or as a PDF (`expo-print`, `expo-sharing`). Closing works with no signal and sends when it can. The server still accepts sales after closing, on purpose: a till with no signal doesn't hear about the close, and what it took must still count. The summary says how many sales were taken after closing.
+
+Not yet checked:
+
+- The new rules and rules tests have not been run (they need the emulator, see Phase 1). Deploy `firestore.rules` before using a build with this change.
+- The organiser screens only appear in a shared event, so they have not been seen running: there is no Firebase project configured on this machine.
+- The PDF has not been made on a device. Closing, the locked till and the summary card were checked in a browser on a this-phone-only event; in a browser "Share as PDF" opens the print dialog instead.
+- Events started before this change have no organiser code, so nobody can edit their price list. Start a new event.
+- If a phone loses its anonymous sign-in (reinstall, cleared data), it can no longer void the sales it took earlier. An organiser can.
+
+Still to do:
+
 3. Float tracking: record each till's opening float so "cash in tin" matches the counted cash.
 4. Item categories and colours; hide items that have sold out.
 5. Reuse last year's price list when starting a new event.

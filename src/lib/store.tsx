@@ -28,14 +28,20 @@ export type SyncStatus = 'local' | 'synced' | 'sending' | 'waiting' | 'attention
 type Store = Persisted & {
   loaded: boolean;
   cloudEnabled: boolean;
+  /** True if this phone may change the price list and void other tills' sales. Always true for a this-phone-only event. */
+  isOrganiser: boolean;
   syncStatus: SyncStatus;
   syncError: string | null;
   startLocalEvent: (name: string, tillName: string) => void;
   createCloudEvent: (name: string, tillName: string) => Promise<void>;
   joinCloudEvent: (code: string, tillName: string) => Promise<void>;
   leaveEvent: () => void;
+  /** Takes on the organiser role with the event's organiser code. Rejects if the code is wrong or there is no signal. */
+  claimOrganiser: (code: string) => Promise<void>;
   setTillName: (name: string) => void;
   setItems: (items: Item[]) => void;
+  /** Closes the event, so tills stop taking sales, or reopens it. Works with no signal; other tills hear when it sends. */
+  setClosed: (closed: boolean) => void;
   recordSale: (lines: SaleLine[], method: PaymentMethod, tendered: number) => Sale;
   setVoided: (saleId: string, voided: boolean) => void;
   flushNow: () => void;
@@ -61,24 +67,27 @@ const isRefusal = (e: unknown) => REFUSAL_CODES.has((e as { code?: string } | nu
 export const MAX_ITEMS = 200; // matches firestore.rules
 const MAX_SALE_LINES = 100; // matches firestore.rules
 
-function refusalReason(op: OutboxOp): string {
+const isOrganiserOf = (session: Session | null) => session?.mode === 'local' || Boolean(session?.organiserCode);
+
+function refusalReason(op: OutboxOp, organiser: boolean): string {
   if (op.kind === 'items') {
-    return op.items.length > MAX_ITEMS
-      ? `The price list has ${op.items.length} items. The most that can be shared is ${MAX_ITEMS}.`
-      : 'The event would not accept this price list.';
+    if (op.items.length > MAX_ITEMS) return `The price list has ${op.items.length} items. The most that can be shared is ${MAX_ITEMS}.`;
+    return organiser ? 'The event would not accept this price list.' : 'Only the organiser can change the price list.';
   }
   if (op.kind === 'sale') {
     return op.sale.lines.length > MAX_SALE_LINES
       ? `This sale has more than ${MAX_SALE_LINES} different items, which is too many to share.`
       : 'The event would not accept this sale.';
   }
-  return 'The event would not accept this change.';
+  if (op.kind === 'close') return organiser ? 'The event would not accept this change.' : 'Only the organiser can close or reopen the event.';
+  return organiser ? 'The event would not accept this change.' : 'Only the organiser can void or restore another till’s sale.';
 }
 
 /** Moves a refused change out of the queue. Order only matters for a sale and its own voids. */
 function park(s: Persisted, op: OutboxOp): Persisted {
   const sameTarget = (o: OutboxOp) =>
     (op.kind === 'items' && o.kind === 'items') ||
+    (op.kind === 'close' && o.kind === 'close') ||
     (op.kind === 'void' && o.kind === 'void' && o.saleId === op.saleId) ||
     (op.kind === 'sale' && o.kind === 'sale' && o.sale.id === op.sale.id);
   return {
@@ -86,7 +95,7 @@ function park(s: Persisted, op: OutboxOp): Persisted {
     // Voids of a parked sale can't be sent on their own. The sale carries its
     // voided state when it is retried, so they are simply dropped.
     outbox: s.outbox.filter((o) => o !== op && !(op.kind === 'sale' && o.kind === 'void' && o.saleId === op.sale.id)),
-    parked: [...s.parked.filter((p) => !sameTarget(p.op)), { id: randomUUID(), op, reason: refusalReason(op) }],
+    parked: [...s.parked.filter((p) => !sameTarget(p.op)), { id: randomUUID(), op, reason: refusalReason(op, isOrganiserOf(s.session)) }],
   };
 }
 
@@ -111,6 +120,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const flushing = useRef(false);
   const memberOk = useRef<string | null>(null); // eventId we've confirmed membership for this run
   const remoteItems = useRef<Item[] | null>(null); // the shared price list, as last heard from the server
+  const remoteClosedAt = useRef<number | null>(null); // whether the event is closed, as last heard from the server
 
   // ---- load & save ----------------------------------------------------------
   useEffect(() => {
@@ -151,6 +161,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   // ---- sync -----------------------------------------------------------------
+  /** (Re)registers this phone with the event: as a member, and as an organiser if it holds the code. */
+  const register = useCallback(
+    async (session: Session) => {
+      await Cloud.joinAsMember(session.eventId, session.code, session.tillName);
+      const code = stateRef.current.session?.organiserCode;
+      if (!code) return;
+      try {
+        await Cloud.claimOrganiser(session.eventId, code);
+      } catch (e) {
+        if (!isRefusal(e)) throw e;
+        // The event doesn't accept the stored code, so this phone isn't an organiser after all.
+        update((s) => (s.session ? { ...s, session: { ...s.session, organiserCode: undefined } } : s));
+      }
+    },
+    [update],
+  );
+
   /** Sends one change. False means the server refused it and retrying as-is won't help. */
   const send = useCallback(async (session: Session, op: OutboxOp) => {
     try {
@@ -160,7 +187,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!isRefusal(e)) throw e; // no signal: leave it queued
     }
     // A refusal can also mean this phone's membership lapsed, so re-join and try once more.
-    await Cloud.joinAsMember(session.eventId, session.code, session.tillName);
+    await register(session);
     try {
       await Cloud.pushOp(session.eventId, op);
       return true;
@@ -171,7 +198,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // resent after a restart. It is already safe on the server, so that counts as sent.
     if (op.kind === 'sale' && (await Cloud.saleExists(session.eventId, op.sale.id))) return true;
     return false;
-  }, []);
+  }, [register]);
 
   const flush = useCallback(async () => {
     const { session } = stateRef.current;
@@ -179,7 +206,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     flushing.current = true;
     try {
       if (memberOk.current !== session.eventId) {
-        await Cloud.joinAsMember(session.eventId, session.code, session.tillName);
+        await register(session);
         memberOk.current = session.eventId;
       }
       while (stateRef.current.outbox.length) {
@@ -201,7 +228,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } finally {
       flushing.current = false;
     }
-  }, [update, send]);
+  }, [update, send, register]);
 
   const enqueue = useCallback(
     (op: OutboxOp) => {
@@ -227,11 +254,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         (ev) =>
           update((s) => {
             remoteItems.current = ev.items;
-            const itemsPending = s.outbox.some((o) => o.kind === 'items') || s.parked.some((p) => p.op.kind === 'items');
+            remoteClosedAt.current = ev.closedAt;
+            const pending = (kind: OutboxOp['kind']) => s.outbox.some((o) => o.kind === kind) || s.parked.some((p) => p.op.kind === kind);
             return {
               ...s,
-              items: itemsPending ? s.items : ev.items,
-              session: s.session ? { ...s.session, eventName: ev.name } : s.session,
+              items: pending('items') ? s.items : ev.items,
+              session: s.session
+                ? { ...s.session, eventName: ev.name, closedAt: pending('close') ? s.session.closedAt : ev.closedAt }
+                : s.session,
             };
           }),
         (remote) =>
@@ -276,11 +306,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const createCloudEvent = useCallback(
     async (name: string, tillName: string) => {
-      const { eventId, code } = await Cloud.createEvent(name, tillName, STARTER_ITEMS);
+      const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, STARTER_ITEMS);
       memberOk.current = eventId;
       update((s) => ({
         ...s,
-        session: { eventId, eventName: name, code, tillName, mode: 'cloud' },
+        session: { eventId, eventName: name, code, tillName, mode: 'cloud', organiserCode },
         items: STARTER_ITEMS,
         sales: {},
         outbox: [],
@@ -311,6 +341,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [update],
   );
 
+  const claimOrganiser = useCallback(
+    async (rawCode: string) => {
+      const session = stateRef.current.session;
+      if (!session || session.mode !== 'cloud') return;
+      const organiserCode = rawCode.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      try {
+        await Cloud.claimOrganiser(session.eventId, organiserCode);
+      } catch (e) {
+        throw isRefusal(e) ? new Error('That isn’t the organiser code for this event. Check it and try again.') : e;
+      }
+      update((s) => (s.session?.eventId === session.eventId ? { ...s, session: { ...s.session, organiserCode } } : s));
+    },
+    [update],
+  );
+
   const setTillName = useCallback(
     (tillName: string) => {
       memberOk.current = null; // re-register so other tills see the new name
@@ -330,6 +375,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         parked: s.parked.filter((p) => p.op.kind !== 'items'),
       }));
       enqueue({ kind: 'items', items });
+    },
+    [update, enqueue],
+  );
+
+  const setClosed = useCallback(
+    (closed: boolean) => {
+      const closedAt = closed ? Date.now() : null;
+      // A new choice replaces any earlier one, whether still queued or refused.
+      update((s) => ({
+        ...s,
+        session: s.session ? { ...s.session, closedAt } : s.session,
+        outbox: s.outbox.filter((o) => o.kind !== 'close'),
+        parked: s.parked.filter((p) => p.op.kind !== 'close'),
+      }));
+      enqueue({ kind: 'close', closedAt });
     },
     [update, enqueue],
   );
@@ -394,6 +454,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       update((s) => {
         const parked = s.parked.filter((p) => p.id !== id);
         if (op.kind === 'items') return { ...s, parked, items: remoteItems.current ?? s.items };
+        if (op.kind === 'close') return { ...s, parked, session: s.session ? { ...s.session, closedAt: remoteClosedAt.current } : s.session };
         const sale = s.sales[op.saleId];
         return { ...s, parked, sales: sale ? { ...s.sales, [op.saleId]: { ...sale, voided: !op.voided } } : s.sales };
       });
@@ -406,6 +467,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       ...state,
       loaded,
       cloudEnabled,
+      isOrganiser: isOrganiserOf(state.session),
       syncStatus:
         state.session?.mode !== 'cloud' ? 'local' : syncStatus === 'synced' && state.parked.length ? 'attention' : syncStatus,
       syncError,
@@ -413,15 +475,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       createCloudEvent,
       joinCloudEvent,
       leaveEvent,
+      claimOrganiser,
       setTillName,
       setItems,
+      setClosed,
       recordSale,
       setVoided,
       flushNow: () => void flush(),
       retryParked,
       discardParked,
     }),
-    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, setTillName, setItems, recordSale, setVoided, flush, retryParked, discardParked],
+    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, claimOrganiser, setTillName, setItems, setClosed, recordSale, setVoided, flush, retryParked, discardParked],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

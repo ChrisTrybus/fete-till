@@ -13,7 +13,7 @@ const toDraft = (items: { id: string; name: string; price: number }[]): Draft[] 
 /** Edit the shared price list. Changes are saved together so every till updates at once. */
 export default function PriceList() {
   const t = useTheme();
-  const { items, setItems, session, parked, discardParked } = useStore();
+  const { items, setItems, session, parked, discardParked, isOrganiser } = useStore();
   // A saved list the event refused (e.g. too long). It stays on this phone only until fixed.
   const refused = parked.find((p) => p.op.kind === 'items');
   // Unsaved edits on this phone. While there are none, the list shown is the shared
@@ -50,6 +50,34 @@ export default function PriceList() {
       `${parsed.length} items loaded. Check them, then tap Save.` + (skipped.length ? ` Skipped: ${skipped.join('; ')}` : ''),
     );
   };
+
+  // Volunteers see the shared list but can't change it. A list this phone saved
+  // before, which the event then refused, can still be discarded.
+  if (!isOrganiser) {
+    return (
+      <ScrollView contentContainerStyle={{ padding: 16, gap: 16, maxWidth: 720, width: '100%', alignSelf: 'center' }}>
+        <Card>
+          <Heading>Price list</Heading>
+          <Body muted>
+            Only an organiser can change the price list. If you run this event, enter the organiser code on the Event tab.
+          </Body>
+          {refused && (
+            <View style={{ gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: t.danger }}>
+              <Body>This phone has price list changes the other tills don’t have. {refused.reason}</Body>
+              <Button title="Go back to the shared list" kind="danger" onPress={() => discardParked(refused.id)} />
+            </View>
+          )}
+          {items.length === 0 && <Body muted>No items yet.</Body>}
+          {items.map((i) => (
+            <View key={i.id} style={{ flexDirection: 'row', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.line }}>
+              <Text style={{ color: t.ink, fontSize: 16, flex: 1 }}>{i.name}</Text>
+              <Text style={[s.num, { color: t.ink, fontSize: 16 }]}>{formatPence(i.price)}</Text>
+            </View>
+          ))}
+        </Card>
+      </ScrollView>
+    );
+  }
 
   return (
     <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>

@@ -1,8 +1,11 @@
 // Firestore layout (see firestore.rules for who can do what):
 //   codes/{CODE}                      { eventId }            join code -> event lookup
-//   events/{eventId}                  { name, code, createdBy, createdAt, items[] }
+//   events/{eventId}                  { name, code, createdBy, createdAt, items[], closedAt? }
 //   events/{eventId}/members/{uid}    { code, tillName, joinedAt }
+//   events/{eventId}/private/organiser { code }             organiser code; no device can read it
+//   events/{eventId}/organisers/{uid} { code, claimedAt }   devices that have proved they know it
 //   events/{eventId}/sales/{saleId}   Sale + { createdBy }
+import { randomUUID } from 'expo-crypto';
 import {
   collection,
   doc,
@@ -23,6 +26,16 @@ export const randomCode = (len = 6) =>
 
 export const normaliseCode = (code: string) => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
 
+/** An 8-character code, long enough that it can't be guessed by trying codes one after another. */
+export function randomOrganiserCode() {
+  // Each UUID starts with 8 random hex digits; two of them give 8 random bytes.
+  const hex = randomUUID().slice(0, 8) + randomUUID().slice(0, 8);
+  return Array.from(
+    { length: 8 },
+    (_, i) => CODE_ALPHABET[parseInt(hex.slice(i * 2, i * 2 + 2), 16) % CODE_ALPHABET.length],
+  ).join('');
+}
+
 function db() {
   const c = getCloud();
   if (!c) throw new Error('Cloud sync is not configured');
@@ -38,6 +51,11 @@ export async function createEvent(name: string, tillName: string, items: Item[])
   const ref = doc(collection(db(), 'events'));
   await withTimeout(setDoc(ref, { name, code: '', createdBy: uid, createdAt: Date.now(), items }));
 
+  // Set the organiser code and claim the role, which the rest of the setup needs.
+  const organiserCode = randomOrganiserCode();
+  await withTimeout(setDoc(doc(ref, 'private', 'organiser'), { code: organiserCode }));
+  await claimOrganiser(ref.id, organiserCode);
+
   // Reserve a unique code. Creating an existing code doc counts as an update,
   // which the rules refuse, so a clash just means "try another".
   let code = '';
@@ -52,7 +70,15 @@ export async function createEvent(name: string, tillName: string, items: Item[])
   }
   await withTimeout(updateDoc(ref, { code }));
   await joinAsMember(ref.id, code, tillName);
-  return { eventId: ref.id, code };
+  return { eventId: ref.id, code, organiserCode };
+}
+
+/** Registers this device as an organiser. The server refuses it unless the code is the event's organiser code. */
+export async function claimOrganiser(eventId: string, organiserCode: string) {
+  const uid = await ensureSignedIn();
+  await withTimeout(
+    setDoc(doc(db(), 'events', eventId, 'organisers', uid), { code: organiserCode, claimedAt: Date.now() }),
+  );
 }
 
 export async function joinEvent(rawCode: string, tillName: string) {
@@ -91,6 +117,9 @@ export async function pushOp(eventId: string, op: OutboxOp) {
     case 'items':
       await withTimeout(updateDoc(event, { items: op.items }));
       break;
+    case 'close':
+      await withTimeout(updateDoc(event, { closedAt: op.closedAt }));
+      break;
   }
 }
 
@@ -103,7 +132,7 @@ export async function saleExists(eventId: string, saleId: string) {
 
 export function watchEvent(
   eventId: string,
-  onEvent: (e: { name: string; items: Item[] }) => void,
+  onEvent: (e: { name: string; items: Item[]; closedAt: number | null }) => void,
   onSales: (sales: Sale[]) => void,
   onError: (e: Error) => void,
 ): Unsubscribe {
@@ -112,7 +141,7 @@ export function watchEvent(
     event,
     (s) => {
       const d = s.data();
-      if (d) onEvent({ name: d.name ?? 'Event', items: d.items ?? [] });
+      if (d) onEvent({ name: d.name ?? 'Event', items: d.items ?? [], closedAt: d.closedAt ?? null });
     },
     onError,
   );

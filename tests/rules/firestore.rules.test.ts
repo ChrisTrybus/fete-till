@@ -29,6 +29,8 @@ const CODE = 'ABC234';
 const ORGANISER = 'organiser';
 const MEMBER = 'member';
 const STRANGER = 'stranger';
+const OTHER_MEMBER = 'other-member';
+const ORGANISER_CODE = 'QRSTUVWX';
 
 const sale = (id: string, createdBy: string, extra: Record<string, unknown> = {}) => ({
   id,
@@ -59,7 +61,7 @@ afterAll(async () => {
   await env.cleanup();
 });
 
-// An event with a join code, its organiser and one other member, and one sale.
+// An event with a join code, its organiser and two other members, and one sale taken by MEMBER.
 beforeEach(async () => {
   await env.clearFirestore();
   await env.withSecurityRulesDisabled(async (ctx) => {
@@ -72,9 +74,11 @@ beforeEach(async () => {
       items: [{ id: 'i1', name: 'Tea', price: 80 }],
     });
     await setDoc(doc(db, 'codes', CODE), { eventId: EVENT });
-    for (const uid of [ORGANISER, MEMBER]) {
+    for (const uid of [ORGANISER, MEMBER, OTHER_MEMBER]) {
       await setDoc(doc(db, 'events', EVENT, 'members', uid), { code: CODE, tillName: uid, joinedAt: 1 });
     }
+    await setDoc(doc(db, 'events', EVENT, 'private', 'organiser'), { code: ORGANISER_CODE });
+    await setDoc(doc(db, 'events', EVENT, 'organisers', ORGANISER), { code: ORGANISER_CODE, claimedAt: 1 });
     await setDoc(doc(db, 'events', EVENT, 'sales', 'sale1'), sale('sale1', MEMBER));
   });
 });
@@ -134,21 +138,48 @@ describe('events', () => {
     await assertFails(setDoc(doc(anon(), 'events', 'anon'), { ...event, createdBy: 'nobody' }));
   });
 
-  test('members can edit the price list; non-members cannot', async () => {
+  test('only an organiser can edit the price list', async () => {
     const items = [{ id: 'i1', name: 'Tea', price: 90 }];
-    await assertSucceeds(updateDoc(doc(as(MEMBER), 'events', EVENT), { items }));
+    await assertSucceeds(updateDoc(doc(as(ORGANISER), 'events', EVENT), { items }));
+    await assertFails(updateDoc(doc(as(MEMBER), 'events', EVENT), { items }));
     await assertFails(updateDoc(doc(as(STRANGER), 'events', EVENT), { items }));
   });
 
   test('the creator and the join code are fixed once set', async () => {
-    await assertFails(updateDoc(doc(as(MEMBER), 'events', EVENT), { createdBy: MEMBER }));
-    await assertFails(updateDoc(doc(as(MEMBER), 'events', EVENT), { code: 'ZZZ999' }));
+    await assertFails(updateDoc(doc(as(ORGANISER), 'events', EVENT), { createdBy: MEMBER }));
     await assertFails(updateDoc(doc(as(ORGANISER), 'events', EVENT), { code: 'ZZZ999' }));
   });
 
   test('a price list over 200 items is refused', async () => {
     const items = Array.from({ length: 201 }, (_, i) => ({ id: `i${i}`, name: `Item ${i}`, price: 100 }));
-    await assertFails(updateDoc(doc(as(MEMBER), 'events', EVENT), { items }));
+    await assertFails(updateDoc(doc(as(ORGANISER), 'events', EVENT), { items }));
+  });
+
+  test('only an organiser can close or reopen the event', async () => {
+    await assertFails(updateDoc(doc(as(MEMBER), 'events', EVENT), { closedAt: 1700000001000 }));
+    await assertSucceeds(updateDoc(doc(as(ORGANISER), 'events', EVENT), { closedAt: 1700000001000 }));
+    await assertFails(updateDoc(doc(as(MEMBER), 'events', EVENT), { closedAt: null }));
+    await assertSucceeds(updateDoc(doc(as(ORGANISER), 'events', EVENT), { closedAt: null }));
+    await assertFails(updateDoc(doc(as(ORGANISER), 'events', EVENT), { closedAt: 'yesterday' }));
+  });
+
+  test('a closed event still accepts sales and voids, so a till with no signal loses nothing', async () => {
+    await env.withSecurityRulesDisabled((ctx) => updateDoc(doc(ctx.firestore(), 'events', EVENT), { closedAt: 1700000001000 }));
+    await assertSucceeds(setDoc(doc(as(MEMBER), 'events', EVENT, 'sales', 'late'), sale('late', MEMBER)));
+    await assertSucceeds(updateDoc(doc(as(MEMBER), 'events', EVENT, 'sales', 'sale1'), { voided: true, voidedAt: 5 }));
+    // The price list can still be corrected too.
+    await assertSucceeds(updateDoc(doc(as(ORGANISER), 'events', EVENT), { items: [] }));
+  });
+
+  test('a new event can be set up from scratch, the way the app does it', async () => {
+    const db = as(STRANGER);
+    const event = doc(db, 'events', 'fresh');
+    await assertSucceeds(setDoc(event, { name: 'New', code: '', createdBy: STRANGER, createdAt: 1, items: [] }));
+    await assertSucceeds(setDoc(doc(event, 'private', 'organiser'), { code: 'HJKMNPQR' }));
+    await assertSucceeds(setDoc(doc(event, 'organisers', STRANGER), { code: 'HJKMNPQR', claimedAt: 1 }));
+    await assertSucceeds(setDoc(doc(db, 'codes', 'NEW234'), { eventId: 'fresh' }));
+    await assertSucceeds(updateDoc(event, { code: 'NEW234' }));
+    await assertSucceeds(setDoc(doc(event, 'members', STRANGER), { code: 'NEW234', tillName: 'Till 1', joinedAt: 1 }));
   });
 
   test('an event cannot be deleted', async () => {
@@ -204,6 +235,66 @@ describe('members', () => {
   });
 });
 
+describe('organisers', () => {
+  const claim = (uid: string, code: unknown) =>
+    setDoc(doc(as(uid), 'events', EVENT, 'organisers', uid), { code, claimedAt: 2 });
+
+  test('a device becomes an organiser by presenting the organiser code', async () => {
+    await assertSucceeds(claim(MEMBER, ORGANISER_CODE));
+    // ...after which it can edit the price list.
+    await assertSucceeds(updateDoc(doc(as(MEMBER), 'events', EVENT), { items: [] }));
+  });
+
+  test('a wrong or missing code is refused', async () => {
+    await assertFails(claim(MEMBER, 'WRONGWRO'));
+    await assertFails(claim(MEMBER, CODE)); // the join code is not enough
+    await assertFails(claim(MEMBER, null));
+    await assertFails(setDoc(doc(as(MEMBER), 'events', EVENT, 'organisers', MEMBER), { claimedAt: 2 }));
+  });
+
+  test('a device cannot make another device an organiser', async () => {
+    await assertFails(
+      setDoc(doc(as(ORGANISER), 'events', EVENT, 'organisers', MEMBER), { code: ORGANISER_CODE, claimedAt: 2 }),
+    );
+  });
+
+  test('an organiser can re-claim the role, as the app does on each launch', async () => {
+    await assertSucceeds(claim(ORGANISER, ORGANISER_CODE));
+  });
+
+  test('nobody can read the organiser code back', async () => {
+    const secret = (uid: string) => doc(as(uid), 'events', EVENT, 'private', 'organiser');
+    await assertFails(getDoc(secret(MEMBER)));
+    await assertFails(getDoc(secret(ORGANISER)));
+    await assertFails(getDocs(collection(as(MEMBER), 'events', EVENT, 'private')));
+    // Other devices' claims carry the code too, so they are hidden as well.
+    await assertFails(getDoc(doc(as(MEMBER), 'events', EVENT, 'organisers', ORGANISER)));
+    await assertFails(getDocs(collection(as(MEMBER), 'events', EVENT, 'organisers')));
+    await assertFails(getDocs(collection(as(ORGANISER), 'events', EVENT, 'organisers')));
+  });
+
+  test('the organiser code cannot be changed or removed once set', async () => {
+    const secret = doc(as(ORGANISER), 'events', EVENT, 'private', 'organiser');
+    await assertFails(setDoc(secret, { code: 'HJKMNPQR' }));
+    await assertFails(deleteDoc(secret));
+  });
+
+  test('only the event creator can set the organiser code, and it must be 8 characters', async () => {
+    await env.withSecurityRulesDisabled((ctx) =>
+      setDoc(doc(ctx.firestore(), 'events', 'event2'), { name: 'Other', code: '', createdBy: STRANGER, items: [] }),
+    );
+    const secret = (uid: string) => doc(as(uid), 'events', 'event2', 'private', 'organiser');
+    await assertFails(setDoc(secret(MEMBER), { code: 'HJKMNPQR' }));
+    await assertFails(setDoc(secret(STRANGER), { code: 'SHORT' }));
+    await assertFails(setDoc(doc(as(STRANGER), 'events', 'event2', 'private', 'other'), { code: 'HJKMNPQR' }));
+    await assertSucceeds(setDoc(secret(STRANGER), { code: 'HJKMNPQR' }));
+  });
+
+  test('an organiser role cannot be removed', async () => {
+    await assertFails(deleteDoc(doc(as(ORGANISER), 'events', EVENT, 'organisers', ORGANISER)));
+  });
+});
+
 describe('sales', () => {
   const saleRef = (uid: string, id: string) => doc(as(uid), 'events', EVENT, 'sales', id);
 
@@ -238,11 +329,18 @@ describe('sales', () => {
     await assertFails(setDoc(saleRef(MEMBER, 'sale1'), sale('sale1', MEMBER, { total: 1 })));
   });
 
-  test('a sale can be voided and restored, alongside nothing else', async () => {
-    await assertSucceeds(updateDoc(saleRef(ORGANISER, 'sale1'), { voided: true, voidedAt: 5 }));
+  test('a till can void and restore its own sale, alongside nothing else', async () => {
+    await assertSucceeds(updateDoc(saleRef(MEMBER, 'sale1'), { voided: true, voidedAt: 5 }));
     await assertSucceeds(updateDoc(saleRef(MEMBER, 'sale1'), { voided: false, voidedAt: 6 }));
     await assertFails(updateDoc(saleRef(MEMBER, 'sale1'), { voided: true, total: 0 }));
-    await assertFails(updateDoc(saleRef(STRANGER, 'sale1'), { voided: true, voidedAt: 7 }));
+  });
+
+  test('only an organiser can void or restore another till’s sale', async () => {
+    await assertFails(updateDoc(saleRef(OTHER_MEMBER, 'sale1'), { voided: true, voidedAt: 5 }));
+    await assertFails(updateDoc(saleRef(STRANGER, 'sale1'), { voided: true, voidedAt: 5 }));
+    await assertSucceeds(updateDoc(saleRef(ORGANISER, 'sale1'), { voided: true, voidedAt: 5 }));
+    await assertSucceeds(updateDoc(saleRef(ORGANISER, 'sale1'), { voided: false, voidedAt: 6 }));
+    await assertFails(updateDoc(saleRef(ORGANISER, 'sale1'), { voided: true, total: 0 }));
   });
 
   test('resending an identical sale is accepted, so retries are safe', async () => {

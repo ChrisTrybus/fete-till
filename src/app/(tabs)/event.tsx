@@ -10,27 +10,52 @@ const describe = (op: OutboxOp) =>
     ? 'Price list changes'
     : op.kind === 'sale'
       ? `Sale of ${formatPence(op.sale.total)} at ${new Date(op.sale.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
-      : op.voided
+      : op.kind === 'close'
+        ? op.closedAt
+          ? 'Closing the event'
+          : 'Reopening the event'
+        : op.voided
         ? 'Voiding a sale'
         : 'Restoring a voided sale';
 
 const advice = (op: OutboxOp) =>
   op.kind === 'items'
-    ? 'Fix it on the Price list tab and save again, or discard to go back to the list the other tills have.'
+    ? 'If you are an organiser, fix it on the Price list tab and save again. Otherwise discard to go back to the list the other tills have.'
     : op.kind === 'sale'
       ? 'It stays in this phone’s Day total and CSV export. If it should not count, void it on the Day total tab.'
-      : 'Discard to put the sale back as the other tills see it.';
+      : op.kind === 'close'
+        ? 'Discard to go back to what the other tills see.'
+        :'Discard to put the sale back as the other tills see it.';
 
 /** Join code to share, this till's name, sync details, and leaving the event. */
 export default function EventScreen() {
   const t = useTheme();
-  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent } = useStore();
+  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed } =
+    useStore();
+  const [confirmClose, setConfirmClose] = useState(false);
+  const [organiserCode, setOrganiserCode] = useState('');
+  const [claiming, setClaiming] = useState(false);
+  const [claimError, setClaimError] = useState<string | null>(null);
   const unshared = outbox.length + parked.length;
   const [till, setTill] = useState(session?.tillName ?? '');
   const [confirmLeave, setConfirmLeave] = useState(false);
   if (!session) return null;
 
   const spaced = session.code.replace(/(.{3})/, '$1 ');
+
+  const claim = async () => {
+    setClaiming(true);
+    setClaimError(null);
+    try {
+      await claimOrganiser(organiserCode);
+      setOrganiserCode('');
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setClaimError(msg === 'timeout' ? 'Couldn’t reach the server. Check you have signal, then try again.' : msg);
+    } finally {
+      setClaiming(false);
+    }
+  };
 
   return (
     <ScrollView contentContainerStyle={{ padding: 16, gap: 16, maxWidth: 620, width: '100%', alignSelf: 'center' }}>
@@ -55,12 +80,88 @@ export default function EventScreen() {
         </Card>
       )}
 
+      {session.mode === 'cloud' &&
+        (isOrganiser ? (
+          <Card>
+            <Label>Organiser code</Label>
+            <Text selectable style={{ color: t.ink, fontSize: 28, fontWeight: '800', letterSpacing: 4, textAlign: 'center' }}>
+              {session.organiserCode?.replace(/(.{4})/, '$1 ')}
+            </Text>
+            <Body muted>
+              This phone is an organiser: it can change the price list and void any till’s sales. Keep this code somewhere safe. You
+              need it to be the organiser on another phone, or on this one if the app is reinstalled. Only give it to people who
+              should run the event.
+            </Body>
+            <Button
+              title="Save code somewhere safe"
+              onPress={() =>
+                Share.share({ message: `Organiser code for "${session.eventName}" on Fete Till: ${session.organiserCode}` }).catch(() => {})
+              }
+            />
+          </Card>
+        ) : (
+          <Card>
+            <Label>Organiser</Label>
+            <Body muted>
+              Only an organiser can change the price list or void another till’s sales. If you run this event, enter the organiser
+              code from the phone that started it.
+            </Body>
+            <Field
+              value={organiserCode}
+              onChangeText={(v) => setOrganiserCode(v.toUpperCase())}
+              placeholder="Organiser code"
+              autoCapitalize="characters"
+              autoCorrect={false}
+              maxLength={12}
+            />
+            <Button
+              title={claiming ? 'Checking…' : 'Become an organiser'}
+              disabled={claiming || organiserCode.replace(/[^A-Za-z0-9]/g, '').length < 8}
+              onPress={claim}
+            />
+            {claimError && <Text style={{ color: t.danger, fontWeight: '700' }}>{claimError}</Text>}
+          </Card>
+        ))}
+
       <Card>
         <Label>This till</Label>
         <Field value={till} onChangeText={setTill} placeholder="e.g. Cake stall" />
         <Button title="Rename till" disabled={!till.trim() || till.trim() === session.tillName} onPress={() => setTillName(till.trim())} />
         <Body muted>New sales use the new name. Earlier sales keep the name they were taken under.</Body>
       </Card>
+
+      {session.closedAt ? (
+        <Card style={{ borderColor: t.accent }}>
+          <Label>Event closed</Label>
+          <Body>
+            Closed at {new Date(session.closedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}. No more sales can be
+            taken. The end-of-day summary is on the Day total tab.
+          </Body>
+          {isOrganiser ? (
+            <Button title="Reopen event" onPress={() => setClosed(false)} />
+          ) : (
+            <Body muted>If it was closed by mistake, the organiser can reopen it.</Body>
+          )}
+        </Card>
+      ) : (
+        isOrganiser && (
+          <Card>
+            <Label>End of the day</Label>
+            <Body muted>
+              Closing the event stops {session.mode === 'cloud' ? 'every till' : 'the till'} taking sales and gives you a summary to send
+              to your treasurer. You can reopen it if you close it by mistake.
+              {session.mode === 'cloud' ? ' A till with no signal stops when it reconnects, and the sales it took still count.' : ''}
+            </Body>
+            <Button
+              title={confirmClose ? 'Tap again to close the event' : 'Close event'}
+              onPress={() => {
+                if (confirmClose) setClosed(true);
+                setConfirmClose(!confirmClose);
+              }}
+            />
+          </Card>
+        )
+      )}
 
       {session.mode === 'cloud' && (
         <Card>

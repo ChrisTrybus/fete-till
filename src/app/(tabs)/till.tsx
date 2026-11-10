@@ -2,7 +2,7 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
-import { Body, Button, Card, Label, s, useTheme } from '@/components/ui';
+import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
 import { saleFeedback, tapFeedback } from '@/lib/haptics';
 import { CASH_BUTTONS, cashLabel, formatPence } from '@/lib/money';
 import { useStore } from '@/lib/store';
@@ -12,7 +12,8 @@ const KEEP_AWAKE_TAG = 'till';
 
 export default function Till() {
   const t = useTheme();
-  const { items, recordSale } = useStore();
+  const { items, recordSale, session, isOrganiser } = useStore();
+  const closed = Boolean(session?.closedAt);
   const { width } = useWindowDimensions();
   const wide = width >= 760; // tablets: items left, sale panel right
   const narrow = width < 380; // small phones (iPhone SE, older Androids)
@@ -165,6 +166,20 @@ export default function Till() {
       </View>
     </Card>
   );
+
+  if (closed) {
+    return (
+      <ScrollView contentContainerStyle={{ padding: 16, gap: 16, maxWidth: 620, width: '100%', alignSelf: 'center' }}>
+        <Card>
+          <Heading>This event is closed</Heading>
+          <Body>No more sales can be taken. The figures are on the Day total tab.</Body>
+          <Body muted>
+            {isOrganiser ? 'Closed by mistake? You can reopen it on the Event tab.' : 'If it was closed by mistake, the organiser can reopen it.'}
+          </Body>
+        </Card>
+      </ScrollView>
+    );
+  }
 
   return (
     <ScrollView contentContainerStyle={{ padding: 16, gap: 16, flexDirection: wide ? 'row' : 'column', alignItems: 'flex-start' }}>
