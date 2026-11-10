@@ -21,6 +21,9 @@ type Persisted = {
   sales: Record<string, Sale>;
   outbox: OutboxOp[];
   parked: ParkedOp[];
+  // The price list and closed state as last heard from the server. Saved so that a
+  // refused change can still be discarded after a restart with no signal.
+  shared: { eventId: string; items: Item[]; closedAt: number | null } | null;
 };
 
 export type SyncStatus = 'local' | 'synced' | 'sending' | 'waiting' | 'attention';
@@ -47,7 +50,10 @@ type Store = Persisted & {
   flushNow: () => void;
   /** Puts a refused change back in the queue to try again. */
   retryParked: (id: string) => void;
-  /** Drops a refused price list or void, going back to what the other tills have. Sales are never dropped. */
+  /**
+   * Drops a refused price list, close or void, going back to what the other tills have. Sales are
+   * never dropped. A price list or close stays set aside until this phone has heard the shared one.
+   */
   discardParked: (id: string) => void;
 };
 
@@ -108,7 +114,7 @@ export function useStore() {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [] });
+  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null });
   const [loaded, setLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -119,8 +125,6 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const stateRef = useRef(state);
   const flushing = useRef(false);
   const memberOk = useRef<string | null>(null); // eventId we've confirmed membership for this run
-  const remoteItems = useRef<Item[] | null>(null); // the shared price list, as last heard from the server
-  const remoteClosedAt = useRef<number | null>(null); // whether the event is closed, as last heard from the server
 
   // ---- load & save ----------------------------------------------------------
   useEffect(() => {
@@ -140,6 +144,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // Local-only events never send, so drop anything an older build queued for them.
         outbox: saved.session?.mode === 'cloud' ? (saved.outbox ?? []) : [],
         parked: saved.session?.mode === 'cloud' ? (saved.parked ?? []) : [],
+        shared: saved.shared ?? null,
       };
       stateRef.current = initial;
       setState(initial);
@@ -253,11 +258,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         session.eventId,
         (ev) =>
           update((s) => {
-            remoteItems.current = ev.items;
-            remoteClosedAt.current = ev.closedAt;
             const pending = (kind: OutboxOp['kind']) => s.outbox.some((o) => o.kind === kind) || s.parked.some((p) => p.op.kind === kind);
             return {
               ...s,
+              shared: { eventId: session.eventId, items: ev.items, closedAt: ev.closedAt },
               items: pending('items') ? s.items : ev.items,
               session: s.session
                 ? { ...s.session, eventName: ev.name, closedAt: pending('close') ? s.session.closedAt : ev.closedAt }
@@ -453,10 +457,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const { op } = entry;
       update((s) => {
         const parked = s.parked.filter((p) => p.id !== id);
-        if (op.kind === 'items') return { ...s, parked, items: remoteItems.current ?? s.items };
-        if (op.kind === 'close') return { ...s, parked, session: s.session ? { ...s.session, closedAt: remoteClosedAt.current } : s.session };
-        const sale = s.sales[op.saleId];
-        return { ...s, parked, sales: sale ? { ...s.sales, [op.saleId]: { ...sale, voided: !op.voided } } : s.sales };
+        if (op.kind === 'void') {
+          const sale = s.sales[op.saleId];
+          return { ...s, parked, sales: sale ? { ...s.sales, [op.saleId]: { ...sale, voided: !op.voided } } : s.sales };
+        }
+        // Without the shared values there is nothing to go back to. Dropping the refusal
+        // anyway would leave this phone on its own prices with no warning, so it stays.
+        const shared = s.shared?.eventId === s.session?.eventId ? s.shared : null;
+        if (!shared || !s.session) return s;
+        if (op.kind === 'items') return { ...s, parked, items: shared.items };
+        return { ...s, parked, session: { ...s.session, closedAt: shared.closedAt } };
       });
     },
     [update],

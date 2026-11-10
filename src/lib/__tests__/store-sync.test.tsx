@@ -355,6 +355,45 @@ describe('a change the event refuses', () => {
     expect(store.syncStatus).toBe('synced');
   });
 
+  test('a refused price list can still be discarded after a restart with no signal', async () => {
+    const firstRun = await launchInCloudEvent();
+    const shared: Item[] = [{ id: 'tea', name: 'Tea', price: 80 }];
+    await act(async () => onRemoteEvent({ name: 'Summer Fete', items: shared }));
+    refuseWhen((op) => op.kind === 'items');
+    await act(async () => store.setItems(longList(201)));
+    await settle();
+    await firstRun.unmount();
+
+    goOffline();
+    cloud.watchEvent.mockImplementation(() => () => {}); // nothing is heard from the server
+    await launch();
+    expect(store.items).toHaveLength(201);
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.items).toEqual(shared);
+  });
+
+  test('a refused price list stays set aside until this phone has heard the shared one', async () => {
+    await launchInCloudEvent(); // nothing heard from the server yet
+    refuseWhen((op) => op.kind === 'items');
+    await act(async () => store.setItems(longList(201)));
+    await settle();
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(1); // still flagged, not silently kept
+    expect(store.items).toHaveLength(201);
+
+    const shared: Item[] = [{ id: 'tea', name: 'Tea', price: 80 }];
+    await act(async () => onRemoteEvent({ name: 'Summer Fete', items: shared }));
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.items).toEqual(shared);
+  });
+
   test('a refused sale is kept on the phone, never dropped, and can be retried', async () => {
     await launchInCloudEvent();
     refuseWhen((op) => op.kind === 'sale');
@@ -628,10 +667,39 @@ describe('closing the event', () => {
     expect(store.parked.map((p) => opKey(p.op))).toEqual(['close']);
     expect(store.parked[0].reason).toMatch(/only the organiser/i);
 
+    // Nothing heard from the server yet, so there is no shared state to go back to.
+    await act(async () => store.discardParked(store.parked[0].id));
+    expect(store.parked).toHaveLength(1);
+    expect(store.session?.closedAt).toEqual(expect.any(Number));
+
+    await act(async () => onRemoteEvent({ ...fete, closedAt: null }));
     await act(async () => store.discardParked(store.parked[0].id));
 
     expect(store.parked).toHaveLength(0);
     expect(store.session?.closedAt).toBeNull();
+  });
+
+  test('discarding a refused reopen after a restart with no signal keeps the event closed', async () => {
+    const firstRun = await launch();
+    await act(() => store.joinCloudEvent('ABC234', 'Tombola'));
+    await settle();
+    await act(async () => onRemoteEvent({ ...fete, closedAt: 1700000000000 }));
+    cloud.pushOp.mockImplementation(async (_id, op) => {
+      if (op.kind === 'close') throw refusal();
+    });
+    await act(async () => store.setClosed(false));
+    await settle();
+    await firstRun.unmount();
+
+    goOffline();
+    cloud.watchEvent.mockImplementation(() => () => {});
+    await launch();
+    expect(store.session?.closedAt).toBeNull();
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.session?.closedAt).toBe(1700000000000);
   });
 
   test('a sale that reaches a closed event from a till with no signal is still sent', async () => {
