@@ -9,7 +9,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, render } from '@testing-library/react-native';
 import * as Cloud from '../cloud';
 import { StoreProvider, useStore } from '../store';
-import type { OutboxOp, Sale, SaleLine } from '../types';
+import type { Item, OutboxOp, Sale, SaleLine } from '../types';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
@@ -21,6 +21,7 @@ jest.mock('../cloud', () => ({
   joinEvent: jest.fn(),
   joinAsMember: jest.fn(),
   pushOp: jest.fn(),
+  saleExists: jest.fn(),
   watchEvent: jest.fn(),
 }));
 
@@ -75,6 +76,7 @@ const pushedOps = () => cloud.pushOp.mock.calls.map(([, op]) => op);
 const opKey = (op: OutboxOp) => (op.kind === 'sale' ? `sale:${op.sale.id}` : op.kind === 'void' ? `void:${op.saleId}` : 'items');
 
 let onRemoteSales: (sales: Sale[]) => void;
+let onRemoteEvent: (e: { name: string; items: Item[] }) => void;
 
 beforeEach(async () => {
   jest.useFakeTimers();
@@ -82,7 +84,9 @@ beforeEach(async () => {
   await AsyncStorage.clear();
   goOnline();
   cloud.createEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234' });
-  cloud.watchEvent.mockImplementation((_id, _onEvent, onSales) => {
+  cloud.saleExists.mockResolvedValue(false);
+  cloud.watchEvent.mockImplementation((_id, onEvent, onSales) => {
+    onRemoteEvent = onEvent;
     onRemoteSales = onSales;
     return () => {};
   });
@@ -284,5 +288,158 @@ describe('local-only events', () => {
     expect(store.sales[sale.id]).toMatchObject({ total: 160, tillName: 'Till 1' });
     expect(cloud.pushOp).not.toHaveBeenCalled();
     expect(cloud.joinAsMember).not.toHaveBeenCalled();
+  });
+});
+
+describe('a change the event refuses', () => {
+  const refusal = () => Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+  const longList = (n: number): Item[] => Array.from({ length: n }, (_, i) => ({ id: `i${i}`, name: `Item ${i}`, price: 100 }));
+  /** The server accepts everything except what `refuse` picks out. */
+  const refuseWhen = (refuse: (op: OutboxOp) => boolean) =>
+    cloud.pushOp.mockImplementation(async (_id, op) => {
+      if (refuse(op)) throw refusal();
+    });
+
+  test('a refused price list is set aside and the sales behind it still send', async () => {
+    await launchInCloudEvent();
+    refuseWhen((op) => op.kind === 'items' && op.items.length > 200);
+
+    await act(async () => store.setItems(longList(201)));
+    const sale = await sell();
+
+    expect(store.outbox).toHaveLength(0);
+    expect(store.parked).toHaveLength(1);
+    expect(store.parked[0].op.kind).toBe('items');
+    expect(store.parked[0].reason).toMatch(/201 items/);
+    expect(store.syncStatus).toBe('attention');
+    expect(cloud.pushOp).toHaveBeenCalledWith('ev1', { kind: 'sale', sale });
+    expect(store.items).toHaveLength(201); // still on this phone, to be fixed
+    expect((await persisted()).parked).toHaveLength(1);
+  });
+
+  test('saving a fixed price list replaces the refused one', async () => {
+    await launchInCloudEvent();
+    refuseWhen((op) => op.kind === 'items' && op.items.length > 200);
+    await act(async () => store.setItems(longList(201)));
+    await settle();
+
+    await act(async () => store.setItems(longList(150)));
+    await settle();
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.outbox).toHaveLength(0);
+    expect(store.syncStatus).toBe('synced');
+    const last = pushedOps().at(-1);
+    expect(last?.kind === 'items' && last.items.length).toBe(150);
+  });
+
+  test('discarding a refused price list goes back to the shared one', async () => {
+    await launchInCloudEvent();
+    const shared: Item[] = [{ id: 'tea', name: 'Tea', price: 80 }];
+    await act(async () => onRemoteEvent({ name: 'Summer Fete', items: shared }));
+    refuseWhen((op) => op.kind === 'items');
+    await act(async () => store.setItems(longList(201)));
+    await settle();
+
+    // An update from the server must not wipe out the list being fixed.
+    await act(async () => onRemoteEvent({ name: 'Summer Fete', items: shared }));
+    expect(store.items).toHaveLength(201);
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.items).toEqual(shared);
+    expect(store.syncStatus).toBe('synced');
+  });
+
+  test('a refused sale is kept on the phone, never dropped, and can be retried', async () => {
+    await launchInCloudEvent();
+    refuseWhen((op) => op.kind === 'sale');
+    const bad = await sell();
+    await act(async () => store.setVoided(bad.id, true)); // voided while set aside
+    await settle();
+
+    expect(store.sales[bad.id]).toMatchObject({ total: 160, voided: true });
+    expect(store.parked.map((p) => opKey(p.op))).toEqual([`sale:${bad.id}`]);
+    expect(store.outbox).toHaveLength(0); // the void is not queued on its own
+
+    await act(async () => store.discardParked(store.parked[0].id));
+    expect(store.parked).toHaveLength(1); // sales can't be discarded
+
+    cloud.pushOp.mockClear();
+    goOnline();
+    await act(async () => store.retryParked(store.parked[0].id));
+    await settle();
+
+    expect(pushedOps()).toEqual([{ kind: 'sale', sale: { ...bad, voided: true } }]);
+    expect(store.parked).toHaveLength(0);
+    expect(store.syncStatus).toBe('synced');
+  });
+
+  test('a resent sale that is already on the server counts as sent', async () => {
+    await launchInCloudEvent();
+    refuseWhen((op) => op.kind === 'sale');
+    cloud.saleExists.mockResolvedValue(true);
+
+    const sale = await sell();
+
+    expect(cloud.saleExists).toHaveBeenCalledWith('ev1', sale.id);
+    expect(store.parked).toHaveLength(0);
+    expect(store.outbox).toHaveLength(0);
+    expect(store.syncStatus).toBe('synced');
+  });
+
+  test('a refusal is retried once after re-joining, in case membership had lapsed', async () => {
+    await launchInCloudEvent();
+    cloud.pushOp.mockRejectedValueOnce(refusal());
+    cloud.joinAsMember.mockClear();
+
+    await sell();
+
+    expect(cloud.joinAsMember).toHaveBeenCalledTimes(1);
+    expect(store.parked).toHaveLength(0);
+    expect(store.outbox).toHaveLength(0);
+  });
+
+  test('a refused void is set aside, and discarding it restores the sale', async () => {
+    await launchInCloudEvent();
+    const sale = await sell();
+    refuseWhen((op) => op.kind === 'void');
+    await act(async () => store.setVoided(sale.id, true));
+    const next = await sell();
+
+    expect(store.parked.map((p) => opKey(p.op))).toEqual([`void:${sale.id}`]);
+    expect(pushedOps().map(opKey)).toContain(`sale:${next.id}`);
+    // The server's un-voided copy doesn't overwrite the choice made here.
+    await act(async () => onRemoteSales([{ ...sale, voided: false }]));
+    expect(store.sales[sale.id].voided).toBe(true);
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.sales[sale.id].voided).toBe(false);
+  });
+
+  test('no signal is never mistaken for a refusal', async () => {
+    await launchInCloudEvent();
+    goOffline();
+    await sell();
+    await settle(60_000);
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.outbox).toHaveLength(1);
+    expect(cloud.saleExists).not.toHaveBeenCalled();
+  });
+
+  test('set-aside changes survive the app being killed', async () => {
+    const firstRun = await launchInCloudEvent();
+    refuseWhen((op) => op.kind === 'sale');
+    const bad = await sell();
+    await firstRun.unmount();
+    await launch();
+
+    expect(store.parked.map((p) => opKey(p.op))).toEqual([`sale:${bad.id}`]);
+    expect(store.sales[bad.id]).toMatchObject({ total: 160 });
+    expect(store.syncStatus).toBe('attention');
   });
 });

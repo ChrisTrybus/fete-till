@@ -8,7 +8,9 @@ import { salesToCsv, summarise } from '@/lib/totals';
 /** End-of-day figures for every till in the event. */
 export default function DayTotal() {
   const t = useTheme();
-  const { sales, setVoided, session } = useStore();
+  const { sales, setVoided, session, parked } = useStore();
+  // Sales the event refused: counted here, but not on the other tills.
+  const notShared = useMemo(() => new Set(parked.flatMap((p) => (p.op.kind === 'sale' ? [p.op.sale.id] : []))), [parked]);
   const list = useMemo(() => Object.values(sales).sort((a, b) => b.at - a.at), [sales]);
   const totals = useMemo(() => summarise(list), [list]);
   const [confirmVoid, setConfirmVoid] = useState<string | null>(null);
@@ -24,6 +26,15 @@ export default function DayTotal() {
         <Stat label="Card" value={formatPence(totals.card)} />
         <Stat label="Sales" value={String(totals.count)} />
       </View>
+
+      {notShared.size > 0 && (
+        <Card style={{ borderColor: t.danger }}>
+          <Body>
+            {notShared.size === 1 ? '1 sale on this phone is' : `${notShared.size} sales on this phone are`} not shared with the other
+            tills, so their totals will be lower than this one. See the Event tab.
+          </Body>
+        </Card>
+      )}
 
       {session?.mode === 'cloud' && (
         <Card>
@@ -62,6 +73,7 @@ export default function DayTotal() {
               <Label>
                 {new Date(sale.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {sale.tillName} · {sale.method}
                 {sale.voided ? ' · voided' : ''}
+                {notShared.has(sale.id) ? ' · not shared' : ''}
               </Label>
               <Text style={[s.num, { color: t.ink, fontWeight: '700', textDecorationLine: sale.voided ? 'line-through' : 'none' }]}>
                 {formatPence(sale.total)}

@@ -1,12 +1,31 @@
 import { useState } from 'react';
 import { ScrollView, Share, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, Label, useTheme } from '@/components/ui';
+import { formatPence } from '@/lib/money';
 import { useStore } from '@/lib/store';
+import type { OutboxOp } from '@/lib/types';
+
+const describe = (op: OutboxOp) =>
+  op.kind === 'items'
+    ? 'Price list changes'
+    : op.kind === 'sale'
+      ? `Sale of ${formatPence(op.sale.total)} at ${new Date(op.sale.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+      : op.voided
+        ? 'Voiding a sale'
+        : 'Restoring a voided sale';
+
+const advice = (op: OutboxOp) =>
+  op.kind === 'items'
+    ? 'Fix it on the Price list tab and save again, or discard to go back to the list the other tills have.'
+    : op.kind === 'sale'
+      ? 'It stays in this phone’s Day total and CSV export. If it should not count, void it on the Day total tab.'
+      : 'Discard to put the sale back as the other tills see it.';
 
 /** Join code to share, this till's name, sync details, and leaving the event. */
 export default function EventScreen() {
   const t = useTheme();
-  const { session, setTillName, outbox, syncStatus, syncError, flushNow, leaveEvent } = useStore();
+  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent } = useStore();
+  const unshared = outbox.length + parked.length;
   const [till, setTill] = useState(session?.tillName ?? '');
   const [confirmLeave, setConfirmLeave] = useState(false);
   if (!session) return null;
@@ -47,18 +66,42 @@ export default function EventScreen() {
         <Card>
           <Label>Sync</Label>
           <Body>
-            {outbox.length === 0 ? 'Everything on this phone has been sent.' : `${outbox.length} change${outbox.length === 1 ? '' : 's'} waiting to send.`}
+            {outbox.length === 0 ? (parked.length ? 'Nothing is waiting to send.' : 'Everything on this phone has been sent.') : `${outbox.length} change${outbox.length === 1 ? '' : 's'} waiting to send.`}
           </Body>
           {syncStatus === 'waiting' && syncError && <Body muted>{syncError}</Body>}
           <Button title="Send now" disabled={outbox.length === 0} onPress={flushNow} />
         </Card>
       )}
 
+      {parked.length > 0 && (
+        <Card style={{ borderColor: t.danger }}>
+          <Label>Not shared</Label>
+          <Body muted>
+            The event would not accept {parked.length === 1 ? 'this change' : 'these changes'}, so other tills can’t see{' '}
+            {parked.length === 1 ? 'it' : 'them'}. Everything else is still being sent.
+          </Body>
+          {parked.map((p) => (
+            <View key={p.id} style={{ gap: 8, paddingTop: 12, borderTopWidth: 1, borderTopColor: t.line }}>
+              <Text style={{ color: t.ink, fontSize: 16, fontWeight: '700' }}>{describe(p.op)}</Text>
+              <Body>{p.reason}</Body>
+              <Body muted>{advice(p.op)}</Body>
+              <View style={{ flexDirection: 'row', gap: 8 }}>
+                <Button title="Try again" onPress={() => retryParked(p.id)} style={{ flex: 1 }} />
+                {p.op.kind !== 'sale' && (
+                  <Button title="Discard" kind="danger" onPress={() => discardParked(p.id)} style={{ flex: 1 }} />
+                )}
+              </View>
+            </View>
+          ))}
+        </Card>
+      )}
+
       <Card>
         <Label>Finished?</Label>
         <Body muted>
-          {outbox.length > 0
-            ? `Leaving now would lose ${outbox.length} unsent change${outbox.length === 1 ? '' : 's'}. Get some signal and tap Send now first.`
+          {unshared > 0
+            ? `Leaving now would lose ${unshared} change${unshared === 1 ? '' : 's'} that other tills don’t have.` +
+              (outbox.length > 0 ? ' Get some signal and tap Send now first.' : ' Export the sales from Day total first if you need them.')
             : 'Leaving removes this event from this phone. Synced sales stay in the event.'}
         </Body>
         <View>

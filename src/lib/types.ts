@@ -40,3 +40,8 @@ export type OutboxOp =
   | { kind: 'sale'; sale: Sale }
   | { kind: 'void'; saleId: string; voided: boolean }
   | { kind: 'items'; items: Item[] };
+
+// A change the server refused outright (not a lost connection). It is set aside so
+// the changes queued behind it can still send, and stays on the phone until the
+// volunteer retries or discards it.
+export type ParkedOp = { id: string; op: OutboxOp; reason: string };

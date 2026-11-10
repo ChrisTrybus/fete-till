@@ -25,6 +25,7 @@ Fixed along the way:
 
 - The send loop relied on React re-rendering between sends to see that a sale had been sent. It now updates its own state directly.
 - Local-only events queued every sale for a sync that never happens, and the Event tab warned about "unsent changes". They no longer queue anything.
+- A change the server refused outright (for example a price list over 200 items) stayed at the front of the outbox and blocked every sale behind it. Refused changes are now set aside so the rest still send. The Event tab lists them with Try again and, for price lists and voids, Discard. A refused sale is never dropped: it stays in this phone's Day total and CSV, marked "not shared". The Price list tab also stops a shared list over 200 items being saved.
 
 Still to do:
 
@@ -32,7 +33,6 @@ Still to do:
 2. Run on real iOS and Android devices. The browser check doesn't cover safe areas, the keyboard, large system font sizes, haptics or keep-awake.
 3. On two real phones: aeroplane mode for a sale session then reconnect, and force-quit with unsent sales. The automated tests cover the app's logic; this checks Firestore and the OS.
 4. Store screenshots (take these from the device run).
-5. Decide what happens when the server permanently refuses a queued change (for example a price list over 200 items). Today it stays at the front of the outbox and blocks every sale behind it.
 
 ## Phase 2: organiser features
 

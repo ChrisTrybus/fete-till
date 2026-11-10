@@ -3,7 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, s, useTheme } from '@/components/ui';
 import { formatPence, parsePounds, parsePriceList } from '@/lib/money';
-import { useStore } from '@/lib/store';
+import { MAX_ITEMS, useStore } from '@/lib/store';
 
 type Draft = { id: string; name: string; price: string };
 
@@ -13,7 +13,9 @@ const toDraft = (items: { id: string; name: string; price: number }[]): Draft[] 
 /** Edit the shared price list. Changes are saved together so every till updates at once. */
 export default function PriceList() {
   const t = useTheme();
-  const { items, setItems, session } = useStore();
+  const { items, setItems, session, parked, discardParked } = useStore();
+  // A saved list the event refused (e.g. too long). It stays on this phone only until fixed.
+  const refused = parked.find((p) => p.op.kind === 'items');
   // Unsaved edits on this phone. While there are none, the list shown is the shared
   // one, so edits made on another till appear straight away.
   const [edited, setEdited] = useState<Draft[] | null>(null);
@@ -28,6 +30,7 @@ export default function PriceList() {
     setDraft((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
   const invalid = draft.filter((d) => !d.name.trim() || parsePounds(d.price) === null);
+  const tooMany = session?.mode === 'cloud' && draft.length > MAX_ITEMS;
 
   const save = () => {
     setItems(draft.map((d) => ({ id: d.id, name: d.name.trim(), price: parsePounds(d.price)! })));
@@ -53,6 +56,21 @@ export default function PriceList() {
       <ScrollView contentContainerStyle={{ padding: 16, gap: 16, maxWidth: 720, width: '100%', alignSelf: 'center' }} keyboardShouldPersistTaps="handled">
         <Card>
           <Heading>Price list</Heading>
+          {refused && (
+            <View style={{ gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, borderColor: t.danger }}>
+              <Body>Not shared with other tills. {refused.reason}</Body>
+              <Body muted>Fix the list and save again, or go back to the list the other tills have.</Body>
+              <Button
+                title="Discard my changes"
+                kind="danger"
+                onPress={() => {
+                  discardParked(refused.id);
+                  setEdited(null);
+                  setMessage(null);
+                }}
+              />
+            </View>
+          )}
           {draft.map((d) => {
             const bad = !d.name.trim() || parsePounds(d.price) === null;
             return (
@@ -81,8 +99,13 @@ export default function PriceList() {
             title="Add item"
             onPress={() => setDraft((d) => [...d, { id: randomUUID(), name: '', price: '' }])}
           />
-          <Button title="Save price list" kind="primary" disabled={!dirty || invalid.length > 0} onPress={save} />
+          <Button title="Save price list" kind="primary" disabled={!dirty || invalid.length > 0 || tooMany} onPress={save} />
           {invalid.length > 0 && <Body muted>Each item needs a name and a price like 1.50.</Body>}
+          {tooMany && (
+            <Body muted>
+              A shared price list can have up to {MAX_ITEMS} items. This one has {draft.length}.
+            </Body>
+          )}
           {message && <Body>{message}</Body>}
         </Card>
 

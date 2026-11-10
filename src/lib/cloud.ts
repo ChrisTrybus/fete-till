@@ -94,6 +94,13 @@ export async function pushOp(eventId: string, op: OutboxOp) {
   }
 }
 
+/** True if the server already holds this sale, e.g. from a send whose confirmation was lost. */
+export async function saleExists(eventId: string, saleId: string) {
+  await ensureSignedIn();
+  const snap = await withTimeout(getDoc(doc(db(), 'events', eventId, 'sales', saleId)));
+  return snap.exists();
+}
+
 export function watchEvent(
   eventId: string,
   onEvent: (e: { name: string; items: Item[] }) => void,
