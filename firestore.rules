@@ -3,6 +3,11 @@ rules_version = '2';
 // Every device signs in anonymously. Access to an event comes from knowing its
 // join code: a device becomes a member by writing members/{its uid} with a code
 // that maps to that event. Members can read the event and add sales to it.
+//
+// Organisers are the devices that know the event's organiser code, which is
+// made when the event is created and kept where no device can read it back.
+// A device becomes an organiser by writing organisers/{its uid} with that code.
+// Only organisers can change the price list or void another till's sales.
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
@@ -15,6 +20,11 @@ service cloud.firestore {
     function isCreator(eventId) {
       return signedIn()
         && get(/databases/$(database)/documents/events/$(eventId)).data.createdBy == request.auth.uid;
+    }
+
+    function isOrganiser(eventId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/events/$(eventId)/organisers/$(request.auth.uid));
     }
 
     // Join codes. Single lookups only (no listing), so codes can't be enumerated.
@@ -33,8 +43,12 @@ service cloud.firestore {
         && request.resource.data.items.size() <= 200;
       allow get: if isMember(eventId)
         || (signedIn() && resource.data.createdBy == request.auth.uid);
-      // Members may edit the name and price list; createdBy and code are fixed once set.
-      allow update: if (isMember(eventId) || (signedIn() && resource.data.createdBy == request.auth.uid))
+      // Organisers may edit the name and price list, and close or reopen the event
+      // (closedAt); createdBy and code are fixed once set. Closing is a signal to
+      // the tills to stop selling. Sales are still accepted afterwards, so that a
+      // till with no signal at closing time doesn't lose what it took.
+      allow update: if isOrganiser(eventId)
+        && (request.resource.data.get('closedAt', null) == null || request.resource.data.closedAt is int)
         && request.resource.data.createdBy == resource.data.createdBy
         && (resource.data.code == '' || request.resource.data.code == resource.data.code)
         && request.resource.data.items.size() <= 200;
@@ -46,7 +60,27 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.eventId == eventId;
       }
 
-      // Sales can be added and voided, never edited or deleted.
+      // The organiser code. Written once by the event's creator and never read
+      // back by any device: it is only ever compared against, below.
+      match /private/{docId} {
+        allow create: if docId == 'organiser'
+          && isCreator(eventId)
+          && request.resource.data.code is string
+          && request.resource.data.code.size() == 8;
+      }
+
+      // A device claims the organiser role by presenting the organiser code.
+      // Each device can read only its own claim, so the code doesn't leak.
+      match /organisers/{uid} {
+        allow get: if signedIn() && request.auth.uid == uid;
+        allow create, update: if signedIn()
+          && request.auth.uid == uid
+          && request.resource.data.code
+            == get(/databases/$(database)/documents/events/$(eventId)/private/organiser).data.code;
+      }
+
+      // Sales can be added and voided, never edited or deleted. A till can void
+      // or restore its own sales; an organiser can do so for any till.
       match /sales/{saleId} {
         allow read: if isMember(eventId);
         allow create: if isMember(eventId)
@@ -56,7 +90,8 @@ service cloud.firestore {
           && request.resource.data.total >= 0
           && request.resource.data.lines.size() <= 100;
         allow update: if isMember(eventId)
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedAt']);
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedAt'])
+          && (resource.data.createdBy == request.auth.uid || isOrganiser(eventId));
       }
     }
   }

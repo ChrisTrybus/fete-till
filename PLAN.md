@@ -9,24 +9,48 @@
 - Day total by cash/card, till and item; voids; CSV export through the share sheet.
 - Local-only mode when Firebase isn't configured.
 
-## Not yet verified
-
-- The app has been typechecked and bundled for Android, but not run on a device.
-- `firestore.rules` has not been run against the Firebase emulator. Phase 1 adds tests.
-
 ## Phase 1: make it trustworthy (before a real event)
 
-1. Run on iOS and Android devices; fix layout issues on small phones and tablets.
-2. Rules tests with `@firebase/rules-unit-testing` and the emulator: non-members can't read an event, a sale can't be edited, codes can't be listed.
-3. Sync tests: aeroplane mode for a whole sale session, then reconnect. Kill the app with unsent sales and confirm they survive.
-4. Haptic feedback on item taps and sale completion (`expo-haptics`).
-5. Keep the screen awake on the Till tab (`expo-keep-awake`).
-6. App icon, splash screen and store screenshots.
+Done:
+
+- Sync tests (`npm test`): a whole sale session with no signal then reconnecting, signal dropping part-way through a send, and the app being killed with unsent sales. These run the real store against a fake Firestore, so they cover the outbox and device storage, not the network itself.
+- Rules tests written (`npm run test:rules`): non-members can't read an event, a sale can't be edited or deleted, codes can't be listed, plus joining, voiding and price-list edits.
+- Haptic feedback on item taps and sale completion (`expo-haptics`).
+- Screen stays awake while the Till tab is showing (`expo-keep-awake`).
+- App icon, Android adaptive icon and splash screen (`npm run icons` redraws them).
+- Layout checked in a browser at 320, 600, 768, 820 and 1024 px wide. Fixed: sale lines cut off on small phones, the price list overflowing its card, bunting stopping short on tablets.
+- Lint set up (`npx expo lint`) and clean.
+
+Fixed along the way:
+
+- The send loop relied on React re-rendering between sends to see that a sale had been sent. It now updates its own state directly.
+- Local-only events queued every sale for a sync that never happens, and the Event tab warned about "unsent changes". They no longer queue anything.
+- A change the server refused outright (for example a price list over 200 items) stayed at the front of the outbox and blocked every sale behind it. Refused changes are now set aside so the rest still send. The Event tab lists them with Try again and, for price lists and voids, Discard. A refused sale is never dropped: it stays in this phone's Day total and CSV, marked "not shared". The Price list tab also stops a shared list over 200 items being saved.
+
+Still to do:
+
+1. Run the rules tests. They need the Firestore emulator, which needs Java (JDK 21 or later). They have not been run yet.
+2. Run on real iOS and Android devices. The browser check doesn't cover safe areas, the keyboard, large system font sizes, haptics or keep-awake.
+3. On two real phones: aeroplane mode for a sale session then reconnect, and force-quit with unsent sales. The automated tests cover the app's logic; this checks Firestore and the OS.
+4. Store screenshots (take these from the device run).
 
 ## Phase 2: organiser features
 
-1. Organiser role: only the event creator can edit the price list or void other tills' sales. Needs the creator to survive reinstalls (sign in with Apple/Google or an organiser PIN).
-2. Close the event: lock new sales and produce an end-of-day summary that can be emailed or shared as a PDF.
+Done:
+
+- Organiser role. Only an organiser can edit the price list or void another till's sales; a till can still void its own. Starting an event makes an 8-character organiser code, shown on that phone's Event tab. Entering it on the Event tab of another phone (or after a reinstall) makes that phone an organiser too, so no accounts are needed. The code is checked by the security rules and can't be read back by any device. A this-phone-only event has no restrictions.
+- Close the event. An organiser closes it on the Event tab (and can reopen it). Every till then shows "This event is closed" instead of the till, and Day total gains an end-of-day summary that can be shared as text or as a PDF (`expo-print`, `expo-sharing`). Closing works with no signal and sends when it can. The server still accepts sales after closing, on purpose: a till with no signal doesn't hear about the close, and what it took must still count. The summary says how many sales were taken after closing.
+
+Not yet checked:
+
+- The new rules and rules tests have not been run (they need the emulator, see Phase 1). Deploy `firestore.rules` before using a build with this change.
+- The organiser screens only appear in a shared event, so they have not been seen running: there is no Firebase project configured on this machine.
+- The PDF has not been made on a device. Closing, the locked till and the summary card were checked in a browser on a this-phone-only event; in a browser "Share as PDF" opens the print dialog instead.
+- Events started before this change have no organiser code, so nobody can edit their price list. Start a new event.
+- If a phone loses its anonymous sign-in (reinstall, cleared data), it can no longer void the sales it took earlier. An organiser can.
+
+Still to do:
+
 3. Float tracking: record each till's opening float so "cash in tin" matches the counted cash.
 4. Item categories and colours; hide items that have sold out.
 5. Reuse last year's price list when starting a new event.

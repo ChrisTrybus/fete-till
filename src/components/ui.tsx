@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, StyleSheet, Text, TextInput, useColorScheme, View, type TextInputProps, type ViewStyle } from 'react-native';
+import { Pressable, StyleSheet, Text, TextInput, useColorScheme, useWindowDimensions, View, type TextInputProps, type ViewStyle } from 'react-native';
 
 const light = {
   bg: '#f3f6f1',
@@ -95,18 +95,22 @@ export function Body({ children, muted }: { children: React.ReactNode; muted?: b
 /** Row of bunting triangles: the app's one decorative flourish. */
 export function Bunting() {
   const t = useTheme();
+  const { width } = useWindowDimensions();
+  const flags = Math.ceil(width / FLAG_WIDTH) + 1; // enough to span tablets too
   return (
     <View style={s.bunting} accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
-      {Array.from({ length: 40 }, (_, i) => (
+      {Array.from({ length: flags }, (_, i) => (
         <View key={i} style={[s.flag, { borderTopColor: t.bunting[Math.floor(i / 2) % t.bunting.length] }]} />
       ))}
     </View>
   );
 }
 
+const FLAG_WIDTH = 14;
+
 export const s = StyleSheet.create({
   button: { borderWidth: 1, borderRadius: 12, paddingVertical: 14, paddingHorizontal: 16, alignItems: 'center', justifyContent: 'center' },
-  buttonText: { fontSize: 16, fontWeight: '700' },
+  buttonText: { fontSize: 16, fontWeight: '700', textAlign: 'center' },
   card: { borderWidth: 1, borderRadius: 16, padding: 16, gap: 12 },
   label: { fontSize: 12, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
   heading: { fontSize: 22, fontWeight: '800' },

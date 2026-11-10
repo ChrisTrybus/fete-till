@@ -33,10 +33,22 @@ export type Session = {
   code: string; // join code shown to other volunteers ('' in local-only mode)
   tillName: string;
   mode: 'cloud' | 'local';
+  // Set on phones that hold the organiser role in a shared event. Only they can
+  // change the price list or void another till's sales. Kept so the role can be
+  // re-claimed if the phone's anonymous sign-in changes.
+  organiserCode?: string;
+  // When an organiser closed the event (epoch ms). While set, tills take no new sales.
+  closedAt?: number | null;
 };
 
 // Writes waiting to reach Firestore. Processed in order; each is safe to retry.
 export type OutboxOp =
   | { kind: 'sale'; sale: Sale }
   | { kind: 'void'; saleId: string; voided: boolean }
-  | { kind: 'items'; items: Item[] };
+  | { kind: 'items'; items: Item[] }
+  | { kind: 'close'; closedAt: number | null }; // null reopens the event
+
+// A change the server refused outright (not a lost connection). It is set aside so
+// the changes queued behind it can still send, and stays on the phone until the
+// volunteer retries or discards it.
+export type ParkedOp = { id: string; op: OutboxOp; reason: string };

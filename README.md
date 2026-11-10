@@ -8,7 +8,9 @@ Built with Expo (React Native, TypeScript) and Firebase (Firestore + anonymous a
 
 - **Local-first.** Every sale is saved on the phone before anything else, then queued. The queue is sent to Firestore whenever there is signal, so a dead spot in the field never loses a sale.
 - **Events and join codes.** The organiser starts an event and gets a 6-character code. Other volunteers enter the code to join. Nobody needs an account; each device signs in anonymously.
-- **One shared price list.** Any till can edit it. Changes reach the other tills when they next have signal.
+- **One shared price list.** Organisers edit it. Changes reach the other tills when they next have signal.
+- **Organisers.** The phone that starts an event gets an organiser code on its Event tab. Only organisers can change the price list or void another till's sales. Entering the code on another phone, or after reinstalling, makes that phone an organiser too.
+- **Closing the event.** An organiser closes the event at the end of the day. Tills stop taking sales, and Day total offers an end-of-day summary to share as text or a PDF.
 - **Day total.** Takings across all tills, split by cash and card, by till and by item, with void and CSV export.
 - **No Firebase yet?** With no `.env`, the app runs in local-only mode: everything works on one phone, without sync.
 
@@ -36,6 +38,17 @@ Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
    firebase deploy --only firestore:rules
    ```
 7. Restart with `npx expo start --clear`.
+
+## Testing
+
+```bash
+npm test              # money, day totals, and offline sync / app-kill tests
+npm run test:rules    # Firestore security rules, against the local emulator
+npx expo lint
+npx tsc --noEmit
+```
+
+`npm run test:rules` starts the Firestore emulator, which needs Java (JDK 21 or later) installed. It uses a throwaway demo project, so it never touches your real Firebase data.
 
 ## Building for the stores
 
@@ -66,6 +79,10 @@ src/lib/cloud.ts         Firestore reads and writes
 src/lib/firebase.ts      Firebase setup and anonymous sign-in
 src/lib/totals.ts        day-total maths and CSV
 src/lib/money.ts         pence formatting and price-list parsing
+src/lib/haptics.ts       touch feedback on the till
+src/lib/__tests__/       unit and sync tests
+tests/rules/             security rules tests
+scripts/make-icons.js    draws the app icon and splash image
 firestore.rules          who can read and write what
 ```
 

@@ -1,4 +1,4 @@
-import { Redirect, Tabs } from 'expo-router';
+import { Redirect, router, Tabs } from 'expo-router';
 import { Pressable, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Bunting, useTheme } from '@/components/ui';
@@ -9,14 +9,17 @@ const statusText: Record<SyncStatus, string> = {
   synced: 'Synced',
   sending: 'Sending…',
   waiting: 'Offline, saved here',
+  attention: 'Needs attention',
 };
 
 function Header() {
   const t = useTheme();
   const insets = useSafeAreaInsets();
   const { session, syncStatus, outbox, flushNow } = useStore();
+  // With nothing to send, the pill opens the Event tab, where refused changes are listed.
+  const onPress = syncStatus === 'attention' ? () => router.navigate('/event') : flushNow;
   const pending = outbox.length;
-  const dot = syncStatus === 'synced' ? t.accent : syncStatus === 'local' ? t.muted : t.sun;
+  const dot = syncStatus === 'synced' ? t.accent : syncStatus === 'local' ? t.muted : syncStatus === 'attention' ? t.danger : t.sun;
   return (
     <View style={{ backgroundColor: t.surface, paddingTop: insets.top }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, paddingHorizontal: 16, paddingVertical: 10 }}>
@@ -29,9 +32,9 @@ function Header() {
           </Text>
         </View>
         <Pressable
-          onPress={flushNow}
+          onPress={onPress}
           accessibilityRole="button"
-          accessibilityLabel={`Sync status: ${statusText[syncStatus]}. Tap to send now.`}
+          accessibilityLabel={`Sync status: ${statusText[syncStatus]}. ${syncStatus === 'attention' ? 'Tap to see what was not shared.' : 'Tap to send now.'}`}
           style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 6, paddingHorizontal: 10, borderRadius: 999, borderWidth: 1, borderColor: t.line }}
         >
           <View style={{ width: 8, height: 8, borderRadius: 4, backgroundColor: dot }} />
@@ -49,7 +52,9 @@ function Header() {
 export default function TabsLayout() {
   const t = useTheme();
   const { loaded, session } = useStore();
-  if (loaded && !session) return <Redirect href="/" />;
+  // Wait for saved state before mounting any tab, so screens never start from empty data.
+  if (!loaded) return <View style={{ flex: 1, backgroundColor: t.bg }} />;
+  if (!session) return <Redirect href="/" />;
   return (
     <Tabs
       screenOptions={{
