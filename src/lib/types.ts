@@ -4,6 +4,9 @@ export type Item = {
   id: string;
   name: string;
   price: number; // pence
+  // Names of the tills that sell this item. Left out when every till sells it.
+  // Matched by till name, so two phones on one stall can share a name and a list.
+  tills?: string[];
 };
 
 export type SaleLine = {

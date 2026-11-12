@@ -4,16 +4,18 @@ import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } fro
 import { Body, Button, Card, Field, Heading, s, useTheme } from '@/components/ui';
 import { formatPence, parsePounds, parsePriceList } from '@/lib/money';
 import { MAX_ITEMS, useStore } from '@/lib/store';
+import { tillKey, toggleTill, uniqueTills } from '@/lib/tills';
+import type { Item } from '@/lib/types';
 
-type Draft = { id: string; name: string; price: string };
+type Draft = { id: string; name: string; price: string; tills?: string[] };
 
-const toDraft = (items: { id: string; name: string; price: number }[]): Draft[] =>
-  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2) }));
+const toDraft = (items: Item[]): Draft[] =>
+  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2), tills: i.tills }));
 
 /** Edit the shared price list. Changes are saved together so every till updates at once. */
 export default function PriceList() {
   const t = useTheme();
-  const { items, setItems, session, parked, discardParked, isOrganiser } = useStore();
+  const { items, setItems, session, parked, discardParked, isOrganiser, tills } = useStore();
   // A saved list the event refused (e.g. too long). It stays on this phone only until fixed.
   const refused = parked.find((p) => p.op.kind === 'items');
   // Unsaved edits on this phone. While there are none, the list shown is the shared
@@ -24,6 +26,12 @@ export default function PriceList() {
   const setDraft = (fn: (d: Draft[]) => Draft[]) => setEdited((d) => fn(d ?? toDraft(items)));
   const [paste, setPaste] = useState('');
   const [message, setMessage] = useState<string | null>(null);
+  // Every till worth offering: this one, those that have joined, and any already
+  // named on an item (so a till that has since left can still be unticked).
+  const knownTills = uniqueTills([session?.tillName ?? '', ...tills, ...draft.flatMap((d) => d.tills ?? [])]);
+  // With a single till there is nothing to choose, so the list stays as plain as ever.
+  const manyTills = knownTills.length > 1;
+  const [choosingTills, setChoosingTills] = useState(false);
 
   const edit = (id: string, patch: Partial<Draft>) => {
     setMessage(null);
@@ -33,7 +41,7 @@ export default function PriceList() {
   const tooMany = session?.mode === 'cloud' && draft.length > MAX_ITEMS;
 
   const save = () => {
-    setItems(draft.map((d) => ({ id: d.id, name: d.name.trim(), price: parsePounds(d.price)! })));
+    setItems(draft.map((d) => ({ id: d.id, name: d.name.trim(), price: parsePounds(d.price)!, ...(d.tills?.length ? { tills: d.tills } : {}) })));
     setEdited(null);
     setMessage(session?.mode === 'cloud' ? 'Price list saved. Other tills will update when they have signal.' : 'Price list saved.');
   };
@@ -70,7 +78,10 @@ export default function PriceList() {
           {items.length === 0 && <Body muted>No items yet.</Body>}
           {items.map((i) => (
             <View key={i.id} style={{ flexDirection: 'row', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.line }}>
-              <Text style={{ color: t.ink, fontSize: 16, flex: 1 }}>{i.name}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: t.ink, fontSize: 16 }}>{i.name}</Text>
+                {i.tills?.length ? <Text style={{ color: t.muted, fontSize: 13 }}>Only on {i.tills.join(', ')}</Text> : null}
+              </View>
               <Text style={[s.num, { color: t.ink, fontSize: 16 }]}>{formatPence(i.price)}</Text>
             </View>
           ))}
@@ -99,10 +110,18 @@ export default function PriceList() {
               />
             </View>
           )}
+          {manyTills && (
+            <>
+              <Body muted>Every till sells every item unless you choose otherwise.</Body>
+              <Button title={choosingTills ? 'Done choosing tills' : 'Choose which tills sell what'} onPress={() => setChoosingTills((v) => !v)} />
+            </>
+          )}
           {draft.map((d) => {
             const bad = !d.name.trim() || parsePounds(d.price) === null;
+            const on = (till: string) => Boolean(d.tills?.some((x) => tillKey(x) === tillKey(till)));
             return (
-              <View key={d.id} style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+              <View key={d.id} style={{ gap: 6 }}>
+              <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
                 <Field value={d.name} onChangeText={(name) => edit(d.id, { name })} placeholder="Item" style={{ flex: 1, minWidth: 0 }} />
                 <Field
                   value={d.price}
@@ -120,6 +139,23 @@ export default function PriceList() {
                 >
                   <Text style={{ color: t.danger, fontSize: 24 }}>×</Text>
                 </Pressable>
+              </View>
+              {manyTills && choosingTills ? (
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingBottom: 6 }}>
+                  <Chip title="All tills" label={`${d.name}: sold on all tills`} selected={!d.tills?.length} onPress={() => edit(d.id, { tills: undefined })} />
+                  {knownTills.map((till) => (
+                    <Chip
+                      key={tillKey(till)}
+                      title={till}
+                      label={`${d.name}: sold on ${till}`}
+                      selected={on(till)}
+                      onPress={() => edit(d.id, { tills: toggleTill(d.tills, till, knownTills) })}
+                    />
+                  ))}
+                </View>
+              ) : d.tills?.length ? (
+                <Text style={{ color: t.muted, fontSize: 13, paddingBottom: 6 }}>Only on {d.tills.join(', ')}</Text>
+              ) : null}
               </View>
             );
           })}
@@ -152,5 +188,28 @@ export default function PriceList() {
         </Card>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+function Chip({ title, label, selected, onPress }: { title: string; label: string; selected: boolean; onPress: () => void }) {
+  const t = useTheme();
+  return (
+    <Pressable
+      onPress={onPress}
+      accessibilityRole="checkbox"
+      accessibilityState={{ checked: selected }}
+      accessibilityLabel={label}
+      hitSlop={4}
+      style={{
+        paddingHorizontal: 12,
+        paddingVertical: 8,
+        borderRadius: 999,
+        borderWidth: 1,
+        borderColor: selected ? t.accent : t.line,
+        backgroundColor: selected ? t.accent : t.surface,
+      }}
+    >
+      <Text style={{ color: selected ? t.accentInk : t.ink, fontSize: 14, fontWeight: '700' }}>{title}</Text>
+    </Pressable>
   );
 }

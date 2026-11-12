@@ -135,6 +135,8 @@ export function watchEvent(
   onEvent: (e: { name: string; items: Item[]; closedAt: number | null }) => void,
   onSales: (sales: Sale[]) => void,
   onError: (e: Error) => void,
+  /** Called with the name of every till that has joined the event. */
+  onTills?: (tillNames: string[]) => void,
 ): Unsubscribe {
   const event = doc(db(), 'events', eventId);
   const u1 = onSnapshot(
@@ -150,8 +152,16 @@ export function watchEvent(
     (s) => onSales(s.docs.map((d) => d.data() as Sale)),
     onError,
   );
+  const u3 = onTills
+    ? onSnapshot(
+        collection(event, 'members'),
+        (s) => onTills(s.docs.map((d) => String(d.data().tillName ?? ''))),
+        onError,
+      )
+    : undefined;
   return () => {
     u1();
     u2();
+    u3?.();
   };
 }

@@ -78,6 +78,7 @@ const opKey = (op: OutboxOp) => (op.kind === 'sale' ? `sale:${op.sale.id}` : op.
 
 let onRemoteSales: (sales: Sale[]) => void;
 let onRemoteEvent: (e: { name: string; items: Item[]; closedAt?: number | null }) => void;
+let onRemoteTills: (tillNames: string[]) => void;
 
 beforeEach(async () => {
   jest.useFakeTimers();
@@ -88,9 +89,10 @@ beforeEach(async () => {
   cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [] });
   cloud.claimOrganiser.mockResolvedValue(undefined);
   cloud.saleExists.mockResolvedValue(false);
-  cloud.watchEvent.mockImplementation((_id, onEvent, onSales) => {
+  cloud.watchEvent.mockImplementation((_id, onEvent, onSales, _onError, onTills) => {
     onRemoteEvent = (e) => onEvent({ closedAt: null, ...e });
     onRemoteSales = onSales;
+    onRemoteTills = onTills!;
     return () => {};
   });
 });
@@ -728,5 +730,60 @@ describe('closing the event', () => {
 
     await act(async () => store.setClosed(false));
     expect(store.session?.closedAt).toBeNull();
+  });
+});
+
+describe('tills and stock', () => {
+  test('an item’s tills are sent with the price list', async () => {
+    await launchInCloudEvent();
+    const list: Item[] = [
+      { id: 'tea', name: 'Tea', price: 80 },
+      { id: 'cake', name: 'Cake', price: 150, tills: ['Cake stall'] },
+    ];
+
+    await act(async () => store.setItems(list));
+    await settle();
+
+    expect(pushedOps().at(-1)).toEqual({ kind: 'items', items: list });
+  });
+
+  test('the organiser hears which tills have joined, and still knows after a restart', async () => {
+    const firstRun = await launchInCloudEvent();
+    await act(async () => onRemoteTills(['Cake stall', 'Tombola']));
+    expect(store.tills).toEqual(['Cake stall', 'Tombola']);
+
+    await firstRun.unmount();
+    cloud.watchEvent.mockImplementation(() => () => {});
+    await launch();
+
+    expect(store.tills).toEqual(['Cake stall', 'Tombola']);
+  });
+
+  test('out of stock is kept on this phone only, survives a restart, and can be undone', async () => {
+    const firstRun = await launchInCloudEvent();
+    cloud.pushOp.mockClear();
+    await act(async () => store.setOutOfStock('tea', true));
+    await act(async () => store.setOutOfStock('tea', true)); // marking twice changes nothing
+    await settle();
+
+    expect(store.outOfStock).toEqual(['tea']);
+    expect(cloud.pushOp).not.toHaveBeenCalled();
+
+    await firstRun.unmount();
+    await launch();
+    expect(store.outOfStock).toEqual(['tea']);
+
+    await act(async () => store.setOutOfStock('tea', false));
+    expect(store.outOfStock).toEqual([]);
+  });
+
+  test('a new event starts with everything in stock', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    await act(async () => store.setOutOfStock('starter-0', true));
+    await act(async () => store.leaveEvent());
+    await act(async () => store.startLocalEvent('Autumn Fair', 'Till 1'));
+
+    expect(store.outOfStock).toEqual([]);
   });
 });
