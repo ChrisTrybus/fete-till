@@ -1,9 +1,10 @@
 // The end-of-day summary an organiser sends to the treasurer once the event is
 // closed: as plain text (for an email or message) and as HTML (printed to a PDF).
 import { cashToCount } from './floats';
+import { giftAidTotals } from './giftaid';
 import { formatPence } from './money';
 import { summarise } from './totals';
-import type { Sale, TillFloat } from './types';
+import type { GiftAidDeclaration, Sale, TillFloat } from './types';
 
 export type SummaryInput = {
   eventName: string;
@@ -19,6 +20,8 @@ export type SummaryInput = {
   savedTotals?: { takings: number; cash: number; card: number; count: number };
   /** Each till’s opening float. With any set, the summary says what each tin should hold. */
   floats?: TillFloat[];
+  /** Gift Aid declarations known to the phone making the summary. Only the totals are shown, never a donor’s details. */
+  giftAid?: GiftAidDeclaration[];
 };
 
 // `text` words a row for the plain-text version, where it isn’t "name: value (count)".
@@ -37,7 +40,7 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The figures and wording, shared by the text and HTML versions so they can't disagree. */
-function build({ eventName, sales, closedAt, notShared = 0, savedTotals, floats = [] }: SummaryInput): Summary {
+function build({ eventName, sales, closedAt, notShared = 0, savedTotals, floats = [], giftAid = [] }: SummaryInput): Summary {
   const totals = summarise(sales);
   const headline = savedTotals ?? totals;
   const voided = sales.filter((s) => s.voided);
@@ -54,6 +57,15 @@ function build({ eventName, sales, closedAt, notShared = 0, savedTotals, floats 
   if (late.length) notes.push(`Includes ${plural(late.length, 'sale', 'sales')} (${formatPence(sum(late))}) taken after the event was closed.`);
   if (notShared) notes.push(`Includes ${plural(notShared, 'sale', 'sales')} held only on the phone that made this summary.`);
   if (savedTotals) notes.push('The individual sales could not be read, so only the totals saved when the event ended are shown.');
+  const aid = giftAidTotals(sales, giftAid);
+  if (aid.donations || aid.count) {
+    notes.push(
+      `Includes ${formatPence(aid.donations)} in donations.` +
+        (aid.count
+          ? ` ${plural(aid.count, 'Gift Aid declaration covers', 'Gift Aid declarations cover')} ${formatPence(aid.declared)}, so ${formatPence(aid.claimable)} can be claimed from HMRC.`
+          : ''),
+    );
+  }
 
   // What each tin should hold when counted: its float plus the cash it took.
   const tins = cashToCount(savedTotals ? { byTill: [], cash: savedTotals.cash } : totals, floats);

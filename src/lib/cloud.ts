@@ -5,6 +5,7 @@
 //   events/{eventId}/private/organiser { code }             organiser code; no device can read it
 //   events/{eventId}/organisers/{uid} { code, claimedAt }   devices that have proved they know it
 //   events/{eventId}/sales/{saleId}   Sale + { createdBy }
+//   events/{eventId}/giftAid/{saleId} GiftAidDeclaration + { createdBy }   only organisers can read these
 import { randomUUID } from 'expo-crypto';
 import {
   collection,
@@ -18,7 +19,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { ensureSignedIn, getCloud } from './firebase';
-import type { Item, Member, OutboxOp, Sale } from './types';
+import type { GiftAidDeclaration, Item, Member, OutboxOp, Sale } from './types';
 
 // No 0/O, 1/I/L so codes are easy to read aloud and type.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -162,6 +163,9 @@ export async function pushOp(eventId: string, op: OutboxOp) {
     case 'close':
       await withTimeout(updateDoc(event, { closedAt: op.closedAt }));
       break;
+    case 'giftAid':
+      await withTimeout(setDoc(doc(event, 'giftAid', op.declaration.saleId), { ...op.declaration, createdBy: uid }));
+      break;
   }
 }
 
@@ -207,4 +211,26 @@ export function watchEvent(
     u2();
     u3?.();
   };
+}
+
+/**
+ * Every Gift Aid declaration in the event. Only organisers may read them, as they
+ * hold donors’ names and addresses; for anyone else the listener reports an error.
+ */
+export function watchGiftAid(
+  eventId: string,
+  onDeclarations: (list: GiftAidDeclaration[]) => void,
+  onError: (e: Error) => void,
+): Unsubscribe {
+  return onSnapshot(
+    collection(db(), 'events', eventId, 'giftAid'),
+    (s) =>
+      onDeclarations(
+        s.docs.map((d) => {
+          const { createdBy: _ignored, ...declaration } = d.data() as GiftAidDeclaration & { createdBy?: string };
+          return declaration;
+        }),
+      ),
+    onError,
+  );
 }

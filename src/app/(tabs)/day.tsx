@@ -1,24 +1,35 @@
+import { router } from 'expo-router';
 import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { Row, Stat } from '@/components/figures';
+import { GiftAidPrompt } from '@/components/gift-aid';
 import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
 import { cashToCount } from '@/lib/floats';
+import { donationIn, giftAidCsv, giftAidTotals } from '@/lib/giftaid';
 import { formatPence } from '@/lib/money';
 import { sharePdf } from '@/lib/share-pdf';
 import { useStore } from '@/lib/store';
 import { summaryHtml, summaryText } from '@/lib/summary';
 import { salesToCsv, summarise } from '@/lib/totals';
+import type { Sale } from '@/lib/types';
 
 /** End-of-day figures for every till in the event. */
 export default function DayTotal() {
   const t = useTheme();
-  const { sales, setVoided, session, parked, isOrganiser, deviceId, floats } = useStore();
+  const { sales, setVoided, session, parked, isOrganiser, deviceId, floats, giftAid } = useStore();
+  const declarations = useMemo(() => Object.values(giftAid), [giftAid]);
+  // A sale whose donor has come back to Gift Aid their donation.
+  const [giftAidFor, setGiftAidFor] = useState<Sale | null>(null);
+  const [giftAidMessage, setGiftAidMessage] = useState<string | null>(null);
   // Sales the event refused: counted here, but not on the other tills.
   const notShared = useMemo(() => new Set(parked.flatMap((p) => (p.op.kind === 'sale' ? [p.op.sale.id] : []))), [parked]);
   const list = useMemo(() => Object.values(sales).sort((a, b) => b.at - a.at), [sales]);
   const totals = useMemo(() => summarise(list), [list]);
   // What each tin should hold: its opening float plus the cash it took.
   const tins = useMemo(() => cashToCount(totals, floats), [totals, floats]);
+  const aid = useMemo(() => giftAidTotals(list, declarations), [list, declarations]);
+  const exportGiftAid = () =>
+    Share.share({ title: `${session?.eventName} Gift Aid`, message: giftAidCsv(list, declarations) }).catch(() => {});
   const [confirmVoid, setConfirmVoid] = useState<string | null>(null);
 
   const exportCsv = () =>
@@ -27,7 +38,7 @@ export default function DayTotal() {
   const closedAt = session?.closedAt ?? null;
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const summary = { eventName: session?.eventName ?? 'Event', sales: list, closedAt, notShared: notShared.size, floats };
+  const summary = { eventName: session?.eventName ?? 'Event', sales: list, closedAt, notShared: notShared.size, floats, giftAid: declarations };
   const shareSummary = () =>
     Share.share({ title: `${summary.eventName}: end-of-day summary`, message: summaryText(summary) }).catch(() => {});
   const sharePdfSummary = async () => {
@@ -89,6 +100,39 @@ export default function DayTotal() {
         )}
       </Card>
 
+      {(aid.donations > 0 || aid.count > 0) && (
+        <Card>
+          <Heading>Gift Aid</Heading>
+          <Row header cells={['', 'Amount']} />
+          <Row cells={['Donations taken', formatPence(aid.donations)]} />
+          <Row cells={[`With a declaration (${aid.count})`, formatPence(aid.declared)]} />
+          <Row cells={['Gift Aid to claim', formatPence(aid.claimable)]} />
+          {isOrganiser ? (
+            <>
+              <Body muted>
+                The export is laid out like HMRC’s Gift Aid schedule, ready to paste into the claim. It holds donors’ names and
+                addresses, so keep it safe.
+                {session?.mode === 'cloud' ? ' Declarations from tills with no signal are added when they reconnect.' : ''}
+              </Body>
+              <Button title="Export Gift Aid declarations" disabled={!aid.count} onPress={exportGiftAid} />
+            </>
+          ) : (
+            <Body muted>
+              Counts the declarations taken on this phone. They are sent to the organiser, who sees every till’s and makes the claim.
+            </Body>
+          )}
+          {giftAidMessage && <Body>{giftAidMessage}</Body>}
+        </Card>
+      )}
+
+      {session?.mode === 'cloud' && isOrganiser && (
+        <Card>
+          <Heading>Leaderboard</Heading>
+          <Body muted>Each till’s takings, updating as sales come in. Big enough to show the stalls.</Body>
+          <Button title="Show leaderboard" kind="primary" onPress={() => router.push('/leaderboard')} />
+        </Card>
+      )}
+
       {notShared.size > 0 && (
         <Card style={{ borderColor: t.danger }}>
           <Body>
@@ -135,6 +179,8 @@ export default function DayTotal() {
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
               <Label>
                 {new Date(sale.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })} · {sale.tillName} · {sale.method}
+                {sale.cardRef ? ` · SumUp ${sale.cardRef}` : ''}
+                {sale.cardUnconfirmed ? ' · check in SumUp' : ''}
                 {sale.voided ? ' · voided' : ''}
                 {notShared.has(sale.id) ? ' · not shared' : ''}
               </Label>
@@ -143,7 +189,16 @@ export default function DayTotal() {
               </Text>
             </View>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 8 }}>
-              <Text style={{ color: t.ink, flex: 1 }}>{sale.lines.map((l) => `${l.qty}× ${l.name}`).join(', ')}</Text>
+              <Text style={{ color: t.ink, flex: 1 }}>
+                {sale.lines.map((l) => `${l.qty}× ${l.name}`).join(', ')}
+                {giftAid[sale.id] ? ' · Gift Aid' : ''}
+              </Text>
+              {/* A donor who said no at the till, or came back later, can still Gift Aid it. */}
+              {!sale.voided && !giftAid[sale.id] && sale.deviceId === deviceId && donationIn(sale) > 0 && (
+                <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setGiftAidFor(sale)}>
+                  <Text style={{ color: t.accent, fontWeight: '700' }}>Add Gift Aid</Text>
+                </Pressable>
+              )}
               {/* A till can void its own sales; only an organiser can void another till's. */}
               {(isOrganiser || sale.deviceId === deviceId) && (
               <Pressable
@@ -166,6 +221,13 @@ export default function DayTotal() {
           </View>
         ))}
       </Card>
+      <GiftAidPrompt
+        sale={giftAidFor}
+        onDone={(message) => {
+          setGiftAidMessage(message);
+          setGiftAidFor(null);
+        }}
+      />
     </ScrollView>
   );
 }

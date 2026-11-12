@@ -97,6 +97,28 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedAt'])
           && (resource.data.createdBy == request.auth.uid || isOrganiser(eventId));
       }
+
+      // Gift Aid declarations hold a donor's name and home address. Any till can
+      // add one; only organisers can read them back, to make the claim. Like
+      // sales, they are never edited or deleted: voiding the sale drops it from the claim.
+      match /giftAid/{saleId} {
+        allow read: if isOrganiser(eventId);
+        allow create: if isMember(eventId)
+          && request.resource.data.saleId == saleId
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.keys().hasOnly(['saleId', 'at', 'amount', 'firstName', 'lastName', 'house', 'postcode', 'tillName', 'deviceId', 'createdBy'])
+          && request.resource.data.amount is int
+          && request.resource.data.amount > 0
+          && request.resource.data.firstName is string && request.resource.data.firstName.size() > 0 && request.resource.data.firstName.size() <= 35
+          && request.resource.data.lastName is string && request.resource.data.lastName.size() > 0 && request.resource.data.lastName.size() <= 35
+          && request.resource.data.house is string && request.resource.data.house.size() > 0 && request.resource.data.house.size() <= 40
+          && request.resource.data.postcode is string && request.resource.data.postcode.size() <= 8;
+        // Sending the same declaration again (its first confirmation was lost) is
+        // harmless. Only the sender's id, which can change after a restart, may differ.
+        allow update: if isMember(eventId)
+          && request.resource.data.createdBy == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['createdBy']);
+      }
     }
   }
 }

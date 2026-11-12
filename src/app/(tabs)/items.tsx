@@ -8,10 +8,10 @@ import { MAX_ITEMS, useStore } from '@/lib/store';
 import { tillKey, toggleTill, uniqueTills } from '@/lib/tills';
 import type { Item } from '@/lib/types';
 
-type Draft = { id: string; name: string; price: string; tills?: string[]; category?: string; colour?: string };
+type Draft = { id: string; name: string; price: string; tills?: string[]; category?: string; colour?: string; donation?: boolean };
 
 const toDraft = (items: Item[]): Draft[] =>
-  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2), tills: i.tills, category: i.category, colour: i.colour }));
+  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2), tills: i.tills, category: i.category, colour: i.colour, donation: i.donation }));
 
 /** Edit the shared price list. Changes are saved together so every till updates at once. */
 export default function PriceList() {
@@ -74,6 +74,7 @@ export default function PriceList() {
         ...(d.tills?.length ? { tills: d.tills } : {}),
         ...(spelling(d.category) ? { category: spelling(d.category) } : {}),
         ...(d.colour ? { colour: d.colour } : {}),
+        ...(d.donation ? { donation: true } : {}),
       })),
     );
     setEdited(null);
@@ -114,9 +115,9 @@ export default function PriceList() {
             <View key={i.id} style={{ flexDirection: 'row', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.line }}>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: t.ink, fontSize: 16 }}>{i.name}</Text>
-                {i.category || i.tills?.length ? (
+                {i.category || i.tills?.length || i.donation ? (
                   <Text style={{ color: t.muted, fontSize: 13 }}>
-                    {[i.category, i.tills?.length ? `Only on ${i.tills.join(', ')}` : ''].filter(Boolean).join(' · ')}
+                    {[i.category, i.donation ? 'Donation' : '', i.tills?.length ? `Only on ${i.tills.join(', ')}` : ''].filter(Boolean).join(' · ')}
                   </Text>
                 ) : null}
               </View>
@@ -156,8 +157,11 @@ export default function PriceList() {
           )}
           {draft.length > 0 && (
             <>
-              <Body muted>Categories such as Drinks or Cakes group the items on the till, each in its own colour.</Body>
-              <Button title={grouping ? 'Done with categories' : 'Set categories and colours'} onPress={() => setGrouping((v) => !v)} />
+              <Body muted>
+                Categories such as Drinks or Cakes group the items on the till, each in its own colour. Mark donations here too: after a
+                sale with a donation, the till asks about Gift Aid.
+              </Body>
+              <Button title={grouping ? 'Done with categories' : 'Set categories, colours and donations'} onPress={() => setGrouping((v) => !v)} />
             </>
           )}
           {draft.map((d) => {
@@ -203,6 +207,14 @@ export default function PriceList() {
               {grouping ? (
                 <View style={{ gap: 8, paddingBottom: 10 }}>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                    <Chip
+                      title="Donation (Gift Aid)"
+                      label={`${d.name}: a donation, eligible for Gift Aid`}
+                      selected={Boolean(d.donation)}
+                      onPress={() => edit(d.id, { donation: !d.donation })}
+                    />
+                  </View>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                     <Chip title="No category" label={`${d.name}: no category`} selected={!categoryKey(d.category)} onPress={() => setCategory(d.id, undefined)} />
                     {categories.map((c) => (
                       <Chip
@@ -243,7 +255,10 @@ export default function PriceList() {
               ) : (
                 <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingBottom: 6 }}>
                   <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: t.tiles[colours.get(d.id) ?? 'red'] }} />
-                  <Text style={{ color: t.muted, fontSize: 13 }}>{d.category?.trim() || 'No category'}</Text>
+                  <Text style={{ color: t.muted, fontSize: 13 }}>
+                    {d.category?.trim() || 'No category'}
+                    {d.donation ? ' · Donation' : ''}
+                  </Text>
                 </View>
               )}
               </View>

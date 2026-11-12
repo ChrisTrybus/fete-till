@@ -44,7 +44,7 @@ export function summarise(sales: Sale[]): DayTotals {
 /** CSV export for the treasurer: one row per sale line. */
 export function salesToCsv(sales: Sale[]): string {
   const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
-  const rows = [['Time', 'Till', 'Payment', 'Item', 'Qty', 'Unit price', 'Line total', 'Voided']];
+  const rows = [['Time', 'Till', 'Payment', 'Item', 'Qty', 'Unit price', 'Line total', 'Voided', 'Card reference']];
   for (const s of [...sales].sort((a, b) => a.at - b.at)) {
     for (const l of s.lines) {
       rows.push([
@@ -56,6 +56,8 @@ export function salesToCsv(sales: Sale[]): string {
         (l.price / 100).toFixed(2),
         ((l.price * l.qty) / 100).toFixed(2),
         s.voided ? 'yes' : 'no',
+        // SumUp's transaction code, to match against the SumUp account. A payment SumUp never confirmed is flagged.
+        s.cardRef ?? (s.cardUnconfirmed ? 'not confirmed by SumUp' : ''),
       ]);
     }
   }
