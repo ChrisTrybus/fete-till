@@ -6,13 +6,19 @@ import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui
 import { saleFeedback, tapFeedback } from '@/lib/haptics';
 import { CASH_BUTTONS, cashLabel, formatPence } from '@/lib/money';
 import { useStore } from '@/lib/store';
-import type { SaleLine } from '@/lib/types';
+import { soldOnTill } from '@/lib/tills';
+import type { Item, SaleLine } from '@/lib/types';
 
 const KEEP_AWAKE_TAG = 'till';
 
 export default function Till() {
   const t = useTheme();
-  const { items, recordSale, session, isOrganiser } = useStore();
+  const { items, recordSale, session, isOrganiser, outOfStock, setOutOfStock } = useStore();
+  // What this till sells, with anything it has run out of moved to the end.
+  const tillName = session?.tillName ?? '';
+  const mine = useMemo(() => items.filter((i) => soldOnTill(i, tillName)), [items, tillName]);
+  const inStock = useMemo(() => mine.filter((i) => !outOfStock.includes(i.id)), [mine, outOfStock]);
+  const soldOut = mine.filter((i) => outOfStock.includes(i.id));
   const closed = Boolean(session?.closedAt);
   const { width, height } = useWindowDimensions();
   const wide = width >= 760; // tablets: items left, sale panel right
@@ -41,10 +47,10 @@ export default function Till() {
   const lines: SaleLine[] = useMemo(
     () =>
       Object.entries(cart).flatMap(([itemId, qty]) => {
-        const it = items.find((i) => i.id === itemId);
+        const it = inStock.find((i) => i.id === itemId);
         return it && qty > 0 ? [{ itemId, name: it.name, price: it.price, qty }] : [];
       }),
-    [cart, items],
+    [cart, inStock],
   );
   const total = lines.reduce((sum, l) => sum + l.price * l.qty, 0);
   const count = lines.reduce((n, l) => n + l.qty, 0);
@@ -65,6 +71,13 @@ export default function Till() {
     setCart({});
     setTendered(0);
   };
+  // Holding a tile marks the item as run out, or brings it back.
+  const setStock = (it: Item, out: boolean) => {
+    saleFeedback();
+    setOutOfStock(it.id, out);
+    if (out) setCart(({ [it.id]: _gone, ...rest }) => rest);
+    setLastMessage(out ? `${it.name} is out of stock. Hold it to bring it back.` : `${it.name} is back in stock.`);
+  };
   const complete = (method: 'cash' | 'card') => {
     recordSale(lines, method, tendered);
     saleFeedback();
@@ -75,8 +88,15 @@ export default function Till() {
   const grid = (
     <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: compact ? 8 : 10 }}>
       {items.length === 0 && <Body muted>No items yet. Add some on the Price list tab.</Body>}
-      {items.map((it, i) => {
-        const qty = cart[it.id] ?? 0;
+      {items.length > 0 && mine.length === 0 && (
+        <Body muted>
+          No items are set for this till. {isOrganiser ? 'Choose them on the Price list tab.' : 'The organiser can choose them on the Price list tab.'}
+        </Body>
+      )}
+      {[...inStock, ...soldOut].map((it) => {
+        const out = outOfStock.includes(it.id);
+        const qty = out ? 0 : (cart[it.id] ?? 0);
+        const i = mine.indexOf(it); // keeps each item's colour when stock changes
         return (
           // The tile is a plain View holding two sibling buttons (add, and one less),
           // so screen readers see both rather than one nested inside the other.
@@ -91,14 +111,21 @@ export default function Till() {
               borderColor: t.line,
               backgroundColor: t.surface,
               borderTopWidth: 5,
-              borderTopColor: t.bunting[i % t.bunting.length],
+              borderTopColor: out ? t.line : t.bunting[i % t.bunting.length],
+              opacity: out ? 0.55 : 1,
               overflow: 'hidden',
             }}
           >
             <Pressable
-              onPress={() => add(it.id, 1)}
+              onPress={() => (out ? setLastMessage(`${it.name} is out of stock. Hold it to bring it back.`) : add(it.id, 1))}
+              onLongPress={() => setStock(it, !out)}
               accessibilityRole="button"
-              accessibilityLabel={`Add ${it.name}, ${formatPence(it.price)}${qty ? `, ${qty} in this sale` : ''}`}
+              accessibilityLabel={out ? `${it.name}, out of stock` : `Add ${it.name}, ${formatPence(it.price)}${qty ? `, ${qty} in this sale` : ''}`}
+              accessibilityHint={out ? 'Hold to bring back into stock' : 'Hold to mark as out of stock'}
+              accessibilityActions={[{ name: 'longpress', label: out ? 'Bring back into stock' : 'Mark as out of stock' }]}
+              onAccessibilityAction={(e) => {
+                if (e.nativeEvent.actionName === 'longpress') setStock(it, !out);
+              }}
               style={({ pressed }) => ({
                 flex: 1,
                 paddingHorizontal: compact ? 10 : 12,
@@ -111,7 +138,11 @@ export default function Till() {
               <Text numberOfLines={2} style={{ color: t.ink, fontSize: compact ? 15 : 16, fontWeight: '700' }}>
                 {it.name}
               </Text>
-              <Text style={[s.num, { color: t.ink, fontSize: compact ? 18 : 20, lineHeight: 28, fontWeight: '800' }]}>{formatPence(it.price)}</Text>
+              {out ? (
+                <Text style={{ color: t.muted, fontSize: 14, lineHeight: 28, fontWeight: '700' }}>Out of stock</Text>
+              ) : (
+                <Text style={[s.num, { color: t.ink, fontSize: compact ? 18 : 20, lineHeight: 28, fontWeight: '800' }]}>{formatPence(it.price)}</Text>
+              )}
             </Pressable>
             {qty > 0 && (
               <View style={{ position: 'absolute', right: compact ? 6 : 10, bottom: compact ? 4 : 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}>

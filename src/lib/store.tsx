@@ -24,6 +24,11 @@ type Persisted = {
   // The price list and closed state as last heard from the server. Saved so that a
   // refused change can still be discarded after a restart with no signal.
   shared: { eventId: string; items: Item[]; closedAt: number | null } | null;
+  // Names of the tills that have joined the event, as last heard from the server.
+  tills: string[];
+  // Ids of items this till has run out of. Kept on this phone only: each stall
+  // knows its own stock, and it must work with no signal.
+  outOfStock: string[];
 };
 
 export type SyncStatus = 'local' | 'synced' | 'sending' | 'waiting' | 'attention';
@@ -43,6 +48,8 @@ type Store = Persisted & {
   claimOrganiser: (code: string) => Promise<void>;
   setTillName: (name: string) => void;
   setItems: (items: Item[]) => void;
+  /** Marks an item as run out on this till, or back in stock. Other tills are not affected. */
+  setOutOfStock: (itemId: string, out: boolean) => void;
   /** Closes the event, so tills stop taking sales, or reopens it. Works with no signal; other tills hear when it sends. */
   setClosed: (closed: boolean) => void;
   recordSale: (lines: SaleLine[], method: PaymentMethod, tendered: number) => Sale;
@@ -114,7 +121,7 @@ export function useStore() {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null });
+  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], outOfStock: [] });
   const [loaded, setLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -145,6 +152,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         outbox: saved.session?.mode === 'cloud' ? (saved.outbox ?? []) : [],
         parked: saved.session?.mode === 'cloud' ? (saved.parked ?? []) : [],
         shared: saved.shared ?? null,
+        tills: saved.tills ?? [],
+        outOfStock: saved.outOfStock ?? [],
       };
       stateRef.current = initial;
       setState(initial);
@@ -280,6 +289,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           }),
         // A listener error (e.g. not yet a member) is retried by the next flush.
         () => setSyncStatus('waiting'),
+        (tills) => update((s) => ({ ...s, tills })),
       );
     } catch {
       // Couldn't even start listening (Firebase misconfigured). Reported the same
@@ -304,6 +314,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         sales: {},
         outbox: [],
         parked: [],
+        tills: [],
+        outOfStock: [],
       })),
     [update],
   );
@@ -319,6 +331,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         sales: {},
         outbox: [],
         parked: [],
+        tills: [],
+        outOfStock: [],
       }));
     },
     [update],
@@ -335,13 +349,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         sales: {},
         outbox: [],
         parked: [],
+        tills: [],
+        outOfStock: [],
       }));
     },
     [update],
   );
 
   const leaveEvent = useCallback(
-    () => update((s) => ({ ...s, session: null, items: [], sales: {}, outbox: [], parked: [] })),
+    () => update((s) => ({ ...s, session: null, items: [], sales: {}, outbox: [], parked: [], tills: [], outOfStock: [] })),
     [update],
   );
 
@@ -381,6 +397,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       enqueue({ kind: 'items', items });
     },
     [update, enqueue],
+  );
+
+  const setOutOfStock = useCallback(
+    (itemId: string, out: boolean) =>
+      update((s) => {
+        const rest = s.outOfStock.filter((id) => id !== itemId);
+        return { ...s, outOfStock: out ? [...rest, itemId] : rest };
+      }),
+    [update],
   );
 
   const setClosed = useCallback(
@@ -488,6 +513,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       claimOrganiser,
       setTillName,
       setItems,
+      setOutOfStock,
       setClosed,
       recordSale,
       setVoided,
@@ -495,7 +521,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       retryParked,
       discardParked,
     }),
-    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, claimOrganiser, setTillName, setItems, setClosed, recordSale, setVoided, flush, retryParked, discardParked],
+    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, claimOrganiser, setTillName, setItems, setOutOfStock, setClosed, recordSale, setVoided, flush, retryParked, discardParked],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
