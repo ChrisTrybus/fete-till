@@ -53,7 +53,37 @@ Still to do:
 
 3. Float tracking: record each till's opening float so "cash in tin" matches the counted cash.
 4. Item categories and colours; hide items that have sold out.
-5. Reuse last year's price list when starting a new event.
+5. ~~Reuse last year's price list when starting a new event.~~ Done in the free tier work below.
+
+## Free tier (this phone only) and paid event packs
+
+The plan: a single till on one phone is free and needs no backend. Shared events with several tills will need a paid event pack, which also unlocks saved price lists. Until purchases exist, shared events stay free.
+
+Decisions so far:
+
+- Pricing is per event, sold as packs: 99p for one event, £2.99 for five. No subscription.
+- Buying any pack unlocks saved price lists on that account for good, not just for that event.
+- Shared events stay free until purchases are live, then need a credit. There are no real users yet, so nobody needs notice of the change.
+- Sales are never blocked part-way through an event. Any limit applies when starting an event, not during one.
+- Free events cost nothing to host: they never touch Firebase.
+- Unused credits and saved lists must survive a reinstall, so they are held against a real sign-in, not the anonymous one. The stores do not restore consumable purchases.
+- Cloud history writes a summary onto the event when it closes, so listing past events reads one document each rather than every sale.
+
+Done (free tier):
+
+- Starting an event defaults to "Just this phone". "Several tills" is the other choice when sync is set up.
+- Past events. Leaving an event saves its sales on the phone (`expo-sqlite` key-value store; browser storage on web). The Past events screen lists them, and each one shows its figures and sales, with the summary, PDF and CSV exports. An event can be deleted from the phone.
+- The price list from the last event this phone ran is offered when starting the next one. Till assignments are dropped for a this-phone-only event.
+
+Not yet checked:
+
+- Past events have only been run in a browser, which uses browser storage. The SQLite store has not been run on a device.
+
+Still to do:
+
+1. Accounts: real sign-in, upgrading the anonymous user.
+2. Purchases: event packs, validated server-side; creating a shared event uses a credit.
+3. Paid features: history kept in the cloud, and saved named price lists.
 
 ## Phase 3: nice to have
 

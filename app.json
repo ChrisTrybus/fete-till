@@ -42,7 +42,8 @@
           }
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      "expo-sqlite"
     ],
     "scheme": "fetetill",
     "experiments": {

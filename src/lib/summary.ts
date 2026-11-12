@@ -11,6 +11,11 @@ export type SummaryInput = {
   closedAt?: number | null;
   /** Sales on this phone that the other tills don't have, so their summaries will differ. */
   notShared?: number;
+  /**
+   * Totals saved when a past event ended, for when its individual sales can no
+   * longer be read. The headline shows these, and a note says the detail is missing.
+   */
+  savedTotals?: { takings: number; cash: number; card: number; count: number };
 };
 
 type Section = { title: string; head: [string, string, string]; rows: [string, string, string][] };
@@ -28,8 +33,9 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The figures and wording, shared by the text and HTML versions so they can't disagree. */
-function build({ eventName, sales, closedAt, notShared = 0 }: SummaryInput): Summary {
+function build({ eventName, sales, closedAt, notShared = 0, savedTotals }: SummaryInput): Summary {
   const totals = summarise(sales);
+  const headline = savedTotals ?? totals;
   const voided = sales.filter((s) => s.voided);
   const live = sales.filter((s) => !s.voided);
   // A till with no signal doesn't hear that the event has closed, and may keep selling.
@@ -43,15 +49,16 @@ function build({ eventName, sales, closedAt, notShared = 0 }: SummaryInput): Sum
   if (voided.length) notes.push(`${plural(voided.length, 'voided sale', 'voided sales')} (${formatPence(sum(voided))}) not counted.`);
   if (late.length) notes.push(`Includes ${plural(late.length, 'sale', 'sales')} (${formatPence(sum(late))}) taken after the event was closed.`);
   if (notShared) notes.push(`Includes ${plural(notShared, 'sale', 'sales')} held only on the phone that made this summary.`);
+  if (savedTotals) notes.push('The individual sales could not be read, so only the totals saved when the event ended are shown.');
 
   return {
     title: eventName,
     date: day(first),
     headline: [
-      ['Takings', formatPence(totals.takings)],
-      ['Cash', formatPence(totals.cash)],
-      ['Card', formatPence(totals.card)],
-      ['Sales', String(totals.count)],
+      ['Takings', formatPence(headline.takings)],
+      ['Cash', formatPence(headline.cash)],
+      ['Card', formatPence(headline.card)],
+      ['Sales', String(headline.count)],
     ],
     notes,
     sections: [

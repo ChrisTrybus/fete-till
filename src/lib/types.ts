@@ -42,6 +42,24 @@ export type Session = {
   organiserCode?: string;
   // When an organiser closed the event (epoch ms). While set, tills take no new sales.
   closedAt?: number | null;
+  // When this phone started or joined the event (epoch ms).
+  startedAt?: number;
+};
+
+// An event this phone has left, as listed under Past events. The totals are
+// saved with it so the list can be shown without loading every sale.
+export type PastEvent = {
+  id: string; // the event's id
+  name: string;
+  mode: 'cloud' | 'local';
+  tillName: string; // this phone's till name in the event
+  startedAt: number; // epoch ms
+  endedAt: number; // when this phone left the event (epoch ms)
+  closedAt: number | null;
+  takings: number; // pence, voided sales excluded
+  cash: number; // pence
+  card: number; // pence
+  count: number; // sales, voided excluded
 };
 
 // Writes waiting to reach Firestore. Processed in order; each is safe to retry.

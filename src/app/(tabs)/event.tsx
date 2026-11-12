@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Share, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, Label, useTheme } from '@/components/ui';
@@ -39,9 +40,23 @@ export default function EventScreen() {
   const unshared = outbox.length + parked.length;
   const [till, setTill] = useState(session?.tillName ?? '');
   const [confirmLeave, setConfirmLeave] = useState(false);
+  const [leaving, setLeaving] = useState(false);
+  // Set when the event couldn't be saved to Past events, so leaving would lose its sales.
+  const [leaveFailed, setLeaveFailed] = useState(false);
   if (!session) return null;
 
   const spaced = session.code.replace(/(.{3})/, '$1 ');
+
+  const leave = async () => {
+    setLeaving(true);
+    try {
+      await leaveEvent({ skipHistory: leaveFailed });
+    } catch {
+      setLeaveFailed(true);
+    } finally {
+      setLeaving(false);
+    }
+  };
 
   const claim = async () => {
     setClaiming(true);
@@ -201,16 +216,26 @@ export default function EventScreen() {
         <Label>Finished?</Label>
         <Body muted>
           {unshared > 0
-            ? `Leaving now would lose ${unshared} change${unshared === 1 ? '' : 's'} that other tills don’t have.` +
-              (outbox.length > 0 ? ' Get some signal and tap Send now first.' : ' Export the sales from Day total first if you need them.')
-            : 'Leaving removes this event from this phone. Synced sales stay in the event.'}
+            ? `${unshared} change${unshared === 1 ? '' : 's'} on this phone ${unshared === 1 ? 'has' : 'have'} not reached the other tills, and won’t if you leave now.` +
+              (outbox.length > 0 ? ' Get some signal and tap Send now first.' : '')
+            : session.mode === 'cloud'
+              ? 'Leaving takes this phone out of the event. Synced sales stay in the event.'
+              : 'Leaving ends the event on this phone.'}{' '}
+          The sales on this phone are kept under Past events.
         </Body>
-        <View>
+        {leaveFailed && (
+          <Text style={{ color: t.danger, fontWeight: '700' }}>
+            Couldn’t save this event to Past events. Export the sales from Day total first, or leave without saving.
+          </Text>
+        )}
+        <View style={{ gap: 8 }}>
           <Button
-            title={confirmLeave ? 'Tap again to leave' : 'Leave event'}
+            title={leaving ? 'Leaving…' : leaveFailed ? 'Leave without saving' : confirmLeave ? 'Tap again to leave' : 'Leave event'}
             kind="danger"
-            onPress={() => (confirmLeave ? leaveEvent() : setConfirmLeave(true))}
+            disabled={leaving}
+            onPress={() => (confirmLeave ? leave() : setConfirmLeave(true))}
           />
+          <Button title="Past events" onPress={() => router.push('/history')} />
         </View>
       </Card>
     </ScrollView>

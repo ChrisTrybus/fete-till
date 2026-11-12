@@ -77,3 +77,17 @@ describe('end-of-day summary', () => {
     expect(html).toContain('Slice of cake');
   });
 });
+
+describe('a past event whose sales cannot be read', () => {
+  const input = { eventName: 'Summer Fete', sales: [], closedAt: CLOSED, savedTotals: { takings: 830, cash: 530, card: 300, count: 3 } };
+
+  test('shows the saved totals rather than zeros, and says the detail is missing', () => {
+    for (const out of [summaryText(input), summaryHtml(input)]) {
+      expect(out).toContain('£8.30');
+      expect(out).toContain('£5.30');
+      expect(out).toContain('£3.00');
+      expect(out).not.toContain('£0.00');
+      expect(out).toContain('The individual sales could not be read');
+    }
+  });
+});
