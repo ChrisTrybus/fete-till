@@ -1,8 +1,9 @@
 // The end-of-day summary an organiser sends to the treasurer once the event is
 // closed: as plain text (for an email or message) and as HTML (printed to a PDF).
+import { cashToCount } from './floats';
 import { formatPence } from './money';
 import { summarise } from './totals';
-import type { Sale } from './types';
+import type { Sale, TillFloat } from './types';
 
 export type SummaryInput = {
   eventName: string;
@@ -16,9 +17,12 @@ export type SummaryInput = {
    * longer be read. The headline shows these, and a note says the detail is missing.
    */
   savedTotals?: { takings: number; cash: number; card: number; count: number };
+  /** Each till’s opening float. With any set, the summary says what each tin should hold. */
+  floats?: TillFloat[];
 };
 
-type Section = { title: string; head: [string, string, string]; rows: [string, string, string][] };
+// `text` words a row for the plain-text version, where it isn’t "name: value (count)".
+type Section = { title: string; head: [string, string, string]; rows: [string, string, string][]; text?: (row: [string, string, string]) => string };
 
 type Summary = {
   title: string;
@@ -33,7 +37,7 @@ const time = (ms: number) => new Date(ms).toLocaleTimeString('en-GB', { hour: '2
 const plural = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
 
 /** The figures and wording, shared by the text and HTML versions so they can't disagree. */
-function build({ eventName, sales, closedAt, notShared = 0, savedTotals }: SummaryInput): Summary {
+function build({ eventName, sales, closedAt, notShared = 0, savedTotals, floats = [] }: SummaryInput): Summary {
   const totals = summarise(sales);
   const headline = savedTotals ?? totals;
   const voided = sales.filter((s) => s.voided);
@@ -51,6 +55,21 @@ function build({ eventName, sales, closedAt, notShared = 0, savedTotals }: Summa
   if (notShared) notes.push(`Includes ${plural(notShared, 'sale', 'sales')} held only on the phone that made this summary.`);
   if (savedTotals) notes.push('The individual sales could not be read, so only the totals saved when the event ended are shown.');
 
+  // What each tin should hold when counted: its float plus the cash it took.
+  const tins = cashToCount(savedTotals ? { byTill: [], cash: savedTotals.cash } : totals, floats);
+  if (tins.float) notes.push(`The tins started with ${formatPence(tins.float)} in floats, so they should hold ${formatPence(tins.inTin)} in cash.`);
+  const tinSection: Section[] =
+    tins.float && !savedTotals
+      ? [
+          {
+            title: 'Cash to count',
+            head: ['Till', 'Float', 'In tin'],
+            rows: tins.rows.map((r) => [r.tillName, formatPence(r.float), formatPence(r.inTin)]),
+            text: ([name, float, inTin]) => `${name}: ${inTin} (float ${float})`,
+          },
+        ]
+      : [];
+
   return {
     title: eventName,
     date: day(first),
@@ -62,6 +81,7 @@ function build({ eventName, sales, closedAt, notShared = 0, savedTotals }: Summa
     ],
     notes,
     sections: [
+      ...tinSection,
       { title: 'By till', head: ['Till', 'Sales', 'Takings'], rows: totals.byTill.map((r) => [r.tillName, String(r.count), formatPence(r.value)]) },
       { title: 'By item', head: ['Item', 'Sold', 'Value'], rows: totals.byItem.map((r) => [r.name, String(r.qty), formatPence(r.value)]) },
     ],
@@ -77,7 +97,7 @@ export function summaryText(input: SummaryInput): string {
   for (const sec of s.sections) {
     if (!sec.rows.length) continue;
     out.push('', sec.title.toUpperCase());
-    for (const [name, count, value] of sec.rows) out.push(`${name}: ${value} (${count})`);
+    for (const row of sec.rows) out.push(sec.text ? sec.text(row) : `${row[0]}: ${row[2]} (${row[1]})`);
   }
   out.push('', 'Made with Cash Tin');
   return out.join('\n');

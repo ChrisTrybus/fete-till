@@ -52,6 +52,25 @@ describe('end-of-day summary', () => {
     expect(text).toContain('Includes 1 sale (£3.00) taken after the event was closed.');
   });
 
+  test('with floats set, says what each tin should hold', () => {
+    const withFloats = summaryText({
+      eventName: 'Summer Fete',
+      sales,
+      closedAt: CLOSED,
+      floats: [
+        { tillName: 'cake stall', float: 2000 },
+        { tillName: 'Plants', float: 1000 },
+      ],
+    });
+    expect(withFloats).toContain('The tins started with £30.00 in floats, so they should hold £35.30 in cash.');
+    expect(withFloats).toContain('CASH TO COUNT');
+    expect(withFloats).toContain('cake stall: £22.30 (float £20.00)');
+    expect(withFloats).toContain('Plants: £10.00 (float £10.00)');
+    expect(withFloats).toContain('Tombola: £3.00 (float £0.00)');
+    expect(withFloats).toContain('Cash: £5.30'); // the float is not takings
+    expect(text).not.toContain('CASH TO COUNT');
+  });
+
   test('says so when the event is still open or some sales are on this phone only', () => {
     const open = summaryText({ eventName: 'Summer Fete', sales, closedAt: null, notShared: 2 });
     expect(open).toContain('still open');

@@ -9,8 +9,9 @@ import { randomUUID } from 'expo-crypto';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as Cloud from './cloud';
 import { cloudEnabled } from './firebase';
+import { tillFloats } from './floats';
 import { savePastEvent } from './history';
-import type { Item, OutboxOp, ParkedOp, PaymentMethod, Sale, SaleLine, Session } from './types';
+import type { Item, Member, OutboxOp, ParkedOp, PaymentMethod, Sale, SaleLine, Session, TillFloat } from './types';
 
 const STORAGE_KEY = 'fetetill:v1';
 const FLUSH_INTERVAL_MS = 15000;
@@ -27,6 +28,8 @@ type Persisted = {
   shared: { eventId: string; items: Item[]; closedAt: number | null } | null;
   // Names of the tills that have joined the event, as last heard from the server.
   tills: string[];
+  // The phones that have joined the event, with each one’s opening float, as last heard from the server.
+  members: Member[];
   // Ids of items this till has run out of. Kept on this phone only: each stall
   // knows its own stock, and it must work with no signal.
   outOfStock: string[];
@@ -43,6 +46,8 @@ type Store = Persisted & {
   isOrganiser: boolean;
   syncStatus: SyncStatus;
   syncError: string | null;
+  /** Each till’s opening float. Tills that haven’t set one are left out. */
+  floats: TillFloat[];
   /** Starts an event kept on this phone only. Uses the starter price list unless one is given. */
   startLocalEvent: (name: string, tillName: string, items?: Item[]) => void;
   /** Starts an event other tills can join. Uses the starter price list unless one is given. */
@@ -56,6 +61,8 @@ type Store = Persisted & {
   /** Takes on the organiser role with the event's organiser code. Rejects if the code is wrong or there is no signal. */
   claimOrganiser: (code: string) => Promise<void>;
   setTillName: (name: string) => void;
+  /** Records the cash in this till’s tin before its first sale (pence). Other tills hear when there is signal. */
+  setFloat: (pence: number) => void;
   setItems: (items: Item[]) => void;
   /** Marks an item as run out on this till, or back in stock. Other tills are not affected. */
   setOutOfStock: (itemId: string, out: boolean) => void;
@@ -130,7 +137,7 @@ export function useStore() {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], outOfStock: [], lastItems: null });
+  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], members: [], outOfStock: [], lastItems: null });
   const [loaded, setLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -162,6 +169,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         parked: saved.session?.mode === 'cloud' ? (saved.parked ?? []) : [],
         shared: saved.shared ?? null,
         tills: saved.tills ?? [],
+        members: saved.members ?? [],
         outOfStock: saved.outOfStock ?? [],
         lastItems: saved.lastItems ?? null,
       };
@@ -188,7 +196,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   /** (Re)registers this phone with the event: as a member, and as an organiser if it holds the code. */
   const register = useCallback(
     async (session: Session) => {
-      await Cloud.joinAsMember(session.eventId, session.code, session.tillName);
+      await Cloud.joinAsMember(session.eventId, session.code, session.tillName, {
+        deviceId: stateRef.current.deviceId,
+        float: session.float ?? 0,
+      });
       const code = stateRef.current.session?.organiserCode;
       if (!code) return;
       try {
@@ -231,7 +242,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     try {
       if (memberOk.current !== session.eventId) {
         await register(session);
-        memberOk.current = session.eventId;
+        // If the till was renamed or its float changed while that was sending, the
+        // other tills have the old details, so the next flush registers again.
+        const now = stateRef.current.session;
+        if (now?.tillName === session.tillName && now.float === session.float) memberOk.current = session.eventId;
       }
       while (stateRef.current.outbox.length) {
         setSyncStatus('sending');
@@ -299,7 +313,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
           }),
         // A listener error (e.g. not yet a member) is retried by the next flush.
         () => setSyncStatus('waiting'),
-        (tills) => update((s) => ({ ...s, tills })),
+        (members) => update((s) => ({ ...s, members, tills: members.map((m) => m.tillName) })),
       );
     } catch {
       // Couldn't even start listening (Firebase misconfigured). Reported the same
@@ -326,6 +340,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         outbox: [],
         parked: [],
         tills: [],
+        members: [],
         outOfStock: [],
       })),
     [update],
@@ -343,6 +358,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         outbox: [],
         parked: [],
         tills: [],
+        members: [],
         outOfStock: [],
       }));
     },
@@ -351,16 +367,18 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const joinCloudEvent = useCallback(
     async (code: string, tillName: string) => {
-      const ev = await Cloud.joinEvent(code, tillName);
-      memberOk.current = ev.eventId;
+      const ev = await Cloud.joinEvent(code, tillName, stateRef.current.deviceId);
+      // A float carried over from an earlier visit is registered again, so the other tills see it against this sign-in.
+      memberOk.current = ev.float ? null : ev.eventId;
       update((s) => ({
         ...s,
-        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now() },
+        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), ...(ev.float ? { float: ev.float } : {}) },
         items: ev.items,
         sales: {},
         outbox: [],
         parked: [],
         tills: [],
+        members: [],
         outOfStock: [],
       }));
     },
@@ -369,11 +387,11 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const leaveEvent = useCallback(
     async (opts?: { skipHistory?: boolean }) => {
-      const { session, sales } = stateRef.current;
+      const { session, sales, deviceId, members } = stateRef.current;
       if (!session) return;
       const list = Object.values(sales);
       // An event with no sales has nothing worth keeping.
-      if (list.length && !opts?.skipHistory) await savePastEvent(session, list, Date.now());
+      if (list.length && !opts?.skipHistory) await savePastEvent(session, list, Date.now(), tillFloats(session, deviceId, members));
       update((s) =>
         s.session?.eventId !== session.eventId
           ? s
@@ -385,6 +403,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               outbox: [],
               parked: [],
               tills: [],
+              members: [],
               outOfStock: [],
               // Only a list this phone was in charge of is offered for the next event.
               lastItems: isOrganiserOf(session) && s.items.length ? s.items : s.lastItems,
@@ -413,6 +432,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     (tillName: string) => {
       memberOk.current = null; // re-register so other tills see the new name
       update((s) => (s.session ? { ...s, session: { ...s.session, tillName } } : s));
+      setTimeout(flush, 0);
+    },
+    [update, flush],
+  );
+
+  const setFloat = useCallback(
+    (pence: number) => {
+      memberOk.current = null; // re-register so other tills see the float
+      update((s) => (s.session ? { ...s, session: { ...s.session, float: pence > 0 ? Math.round(pence) : undefined } } : s));
       setTimeout(flush, 0);
     },
     [update, flush],
@@ -539,12 +567,14 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       syncStatus:
         state.session?.mode !== 'cloud' ? 'local' : syncStatus === 'synced' && state.parked.length ? 'attention' : syncStatus,
       syncError,
+      floats: tillFloats(state.session, state.deviceId, state.members),
       startLocalEvent,
       createCloudEvent,
       joinCloudEvent,
       leaveEvent,
       claimOrganiser,
       setTillName,
+      setFloat,
       setItems,
       setOutOfStock,
       setClosed,
@@ -554,7 +584,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       retryParked,
       discardParked,
     }),
-    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, claimOrganiser, setTillName, setItems, setOutOfStock, setClosed, recordSale, setVoided, flush, retryParked, discardParked],
+    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, claimOrganiser, setTillName, setFloat, setItems, setOutOfStock, setClosed, recordSale, setVoided, flush, retryParked, discardParked],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

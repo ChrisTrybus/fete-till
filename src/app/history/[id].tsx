@@ -4,6 +4,7 @@ import { ScrollView, Share, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Row, Stat } from '@/components/figures';
 import { Body, Bunting, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
+import { cashToCount } from '@/lib/floats';
 import { deletePastEvent, loadPastEvent } from '@/lib/history';
 import { formatPence } from '@/lib/money';
 import { sharePdf } from '@/lib/share-pdf';
@@ -56,6 +57,7 @@ export default function PastEventScreen() {
 
   // If the sales can't be read, the totals saved when the event ended still can.
   const figures = list.length ? totals : event;
+  const tins = cashToCount(list.length ? totals : { byTill: [], cash: event.cash }, event.floats ?? []);
 
   // The event is over for this phone, so the summary treats the time it left as the close.
   // Without the sales, the summary carries the saved totals rather than working out zeros.
@@ -64,6 +66,7 @@ export default function PastEventScreen() {
     sales: list,
     closedAt: event.closedAt ?? event.endedAt,
     savedTotals: list.length ? undefined : { takings: event.takings, cash: event.cash, card: event.card, count: event.count },
+    floats: event.floats,
   };
   const shareSummary = () => Share.share({ title: `${event.name}: end-of-day summary`, message: summaryText(summary) }).catch(() => {});
   const exportCsv = () => Share.share({ title: `${event.name} sales`, message: salesToCsv(list) }).catch(() => {});
@@ -119,6 +122,23 @@ export default function PastEventScreen() {
           <Button title="Export sales as CSV" disabled={!list.length} onPress={exportCsv} />
           {error && <Text style={{ color: t.danger, fontWeight: '700' }}>{error}</Text>}
         </Card>
+
+        {tins.float > 0 && (
+          <Card>
+            <Heading>Cash to count</Heading>
+            <Body muted>
+              The tins started with {formatPence(tins.float)} in floats, so they should have held {formatPence(tins.inTin)} in cash.
+            </Body>
+            {list.length > 0 && (
+              <>
+                <Row header cells={['Till', 'Float', 'Cash taken', 'In tin']} />
+                {tins.rows.map((r) => (
+                  <Row key={r.tillName} cells={[r.tillName, formatPence(r.float), formatPence(r.cash), formatPence(r.inTin)]} />
+                ))}
+              </>
+            )}
+          </Card>
+        )}
 
         {totals.byTill.length > 1 && (
           <Card>

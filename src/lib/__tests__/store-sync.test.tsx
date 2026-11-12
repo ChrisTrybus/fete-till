@@ -10,7 +10,7 @@ import { act, render } from '@testing-library/react-native';
 import * as Cloud from '../cloud';
 import { listPastEvents, loadPastEvent } from '../history';
 import { StoreProvider, useStore } from '../store';
-import type { Item, OutboxOp, Sale, SaleLine } from '../types';
+import type { Item, Member, OutboxOp, Sale, SaleLine } from '../types';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
@@ -83,7 +83,7 @@ const opKey = (op: OutboxOp) => (op.kind === 'sale' ? `sale:${op.sale.id}` : op.
 
 let onRemoteSales: (sales: Sale[]) => void;
 let onRemoteEvent: (e: { name: string; items: Item[]; closedAt?: number | null }) => void;
-let onRemoteTills: (tillNames: string[]) => void;
+let onRemoteMembers: (members: Member[]) => void;
 
 beforeEach(async () => {
   jest.useFakeTimers();
@@ -91,13 +91,13 @@ beforeEach(async () => {
   await AsyncStorage.clear();
   goOnline();
   cloud.createEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', organiserCode: 'QRSTUVWX' });
-  cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [] });
+  cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 0 });
   cloud.claimOrganiser.mockResolvedValue(undefined);
   cloud.saleExists.mockResolvedValue(false);
-  cloud.watchEvent.mockImplementation((_id, onEvent, onSales, _onError, onTills) => {
+  cloud.watchEvent.mockImplementation((_id, onEvent, onSales, _onError, onMembers) => {
     onRemoteEvent = (e) => onEvent({ closedAt: null, ...e });
     onRemoteSales = onSales;
-    onRemoteTills = onTills!;
+    onRemoteMembers = onMembers!;
     return () => {};
   });
 });
@@ -243,7 +243,7 @@ describe('the app is killed with unsent sales', () => {
     await settle(15_000);
 
     // A restart may bring a new anonymous user, so the till re-joins before sending.
-    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall');
+    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 0 });
     expect(pushedOps().map(opKey)).toEqual([`sale:${a.id}`, `sale:${b.id}`, `void:${a.id}`]);
     expect(store.outbox).toHaveLength(0);
     expect(store.syncStatus).toBe('synced');
@@ -754,7 +754,12 @@ describe('tills and stock', () => {
 
   test('the organiser hears which tills have joined, and still knows after a restart', async () => {
     const firstRun = await launchInCloudEvent();
-    await act(async () => onRemoteTills(['Cake stall', 'Tombola']));
+    await act(async () =>
+      onRemoteMembers([
+        { deviceId: store.deviceId, tillName: 'Cake stall', float: 0 },
+        { deviceId: 'other', tillName: 'Tombola', float: 0 },
+      ]),
+    );
     expect(store.tills).toEqual(['Cake stall', 'Tombola']);
 
     await firstRun.unmount();
@@ -762,6 +767,68 @@ describe('tills and stock', () => {
     await launch();
 
     expect(store.tills).toEqual(['Cake stall', 'Tombola']);
+  });
+
+  test('a till’s float is sent to the other tills, and theirs are heard', async () => {
+    await launchInCloudEvent();
+    cloud.joinAsMember.mockClear();
+
+    await act(async () => store.setFloat(2000));
+    await settle();
+
+    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 2000 });
+    expect(store.floats).toEqual([{ tillName: 'Cake stall', float: 2000 }]);
+
+    // The server's copy of this phone's float is not added on top of its own.
+    await act(async () =>
+      onRemoteMembers([
+        { deviceId: store.deviceId, tillName: 'Cake stall', float: 2000 },
+        { deviceId: 'other', tillName: 'Tombola', float: 1500 },
+      ]),
+    );
+    expect(store.floats).toEqual([
+      { tillName: 'Cake stall', float: 2000 },
+      { tillName: 'Tombola', float: 1500 },
+    ]);
+  });
+
+  test('a float set with no signal counts on this phone straight away and is sent on reconnect', async () => {
+    await launchInCloudEvent();
+    goOffline();
+    await act(async () => store.setFloat(2500));
+    await settle();
+
+    expect(store.floats).toEqual([{ tillName: 'Cake stall', float: 2500 }]);
+    expect((await persisted()).session.float).toBe(2500);
+
+    cloud.joinAsMember.mockClear();
+    goOnline();
+    await settle(15_000);
+    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 2500 });
+  });
+
+  test('a phone that rejoins an event gets its float back and tells the other tills again', async () => {
+    await launch();
+    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 1500 });
+
+    await act(() => store.joinCloudEvent('ABC234', 'Tombola'));
+    await settle();
+
+    expect(cloud.joinEvent).toHaveBeenCalledWith('ABC234', 'Tombola', store.deviceId);
+    expect(store.session?.float).toBe(1500);
+    expect(store.floats).toEqual([{ tillName: 'Tombola', float: 1500 }]);
+    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Tombola', { deviceId: store.deviceId, float: 1500 });
+  });
+
+  test('floats are saved with the event when the phone leaves it', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Bake sale', 'Till 1'));
+    await act(async () => store.setFloat(1000));
+    await sell();
+    await act(() => store.leaveEvent());
+
+    const [event] = await listPastEvents();
+    expect(event.floats).toEqual([{ tillName: 'Till 1', float: 1000 }]);
   });
 
   test('out of stock is kept on this phone only, survives a restart, and can be undone', async () => {
@@ -865,7 +932,7 @@ describe('the price list for the next event', () => {
   });
 
   test('a list from an event this phone only joined is not offered', async () => {
-    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [CAKE] });
+    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [CAKE], float: 0 });
     await launch();
     await act(() => store.joinCloudEvent('ABC234', 'Cake stall'));
     await act(() => store.leaveEvent());

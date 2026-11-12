@@ -3,7 +3,7 @@
 // separately, so opening the list never loads every sale ever taken.
 import { historyStorage } from './history-storage';
 import { summarise } from './totals';
-import type { PastEvent, Sale, Session } from './types';
+import type { PastEvent, Sale, Session, TillFloat } from './types';
 
 const INDEX_KEY = 'cashtin:history:index';
 const salesKey = (id: string) => `cashtin:history:sales:${id}`;
@@ -28,7 +28,7 @@ async function readIndex(): Promise<PastEvent[]> {
 }
 
 /** The figures shown in the list of past events, worked out once when the event ends. */
-export function describeEvent(session: Session, sales: Sale[], endedAt: number): PastEvent {
+export function describeEvent(session: Session, sales: Sale[], endedAt: number, floats: TillFloat[] = []): PastEvent {
   const totals = summarise(sales);
   const first = sales.length ? Math.min(...sales.map((s) => s.at)) : endedAt;
   return {
@@ -43,6 +43,7 @@ export function describeEvent(session: Session, sales: Sale[], endedAt: number):
     cash: totals.cash,
     card: totals.card,
     count: totals.count,
+    ...(floats.length ? { floats } : {}),
   };
 }
 
@@ -68,7 +69,7 @@ async function readSales(id: string): Promise<Sale[]> {
  * other tills exists only in the copy saved here. So sales already saved for the
  * event are kept, and the phone's current copy of a sale wins where both have it.
  */
-export const savePastEvent = (session: Session, sales: Sale[], endedAt: number): Promise<void> =>
+export const savePastEvent = (session: Session, sales: Sale[], endedAt: number, floats: TillFloat[] = []): Promise<void> =>
   inTurn(async () => {
     const index = await readIndex();
     const earlier = index.find((e) => e.id === session.eventId);
@@ -77,7 +78,7 @@ export const savePastEvent = (session: Session, sales: Sale[], endedAt: number):
     for (const sale of sales) merged.set(sale.id, sale);
     const all = [...merged.values()];
 
-    const event = describeEvent(session, all, endedAt);
+    const event = describeEvent(session, all, endedAt, floats);
     if (earlier) event.startedAt = Math.min(earlier.startedAt, event.startedAt);
 
     // Sales first: an event is only listed once its sales are safely stored.
