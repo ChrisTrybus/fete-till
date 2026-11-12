@@ -72,7 +72,7 @@ export function summaryText(input: SummaryInput): string {
     out.push('', sec.title.toUpperCase());
     for (const [name, count, value] of sec.rows) out.push(`${name}: ${value} (${count})`);
   }
-  out.push('', 'Made with Fete Till');
+  out.push('', 'Made with Cash Tin');
   return out.join('\n');
 }
 
@@ -114,6 +114,6 @@ export function summaryHtml(input: SummaryInput): string {
     .join('')}</div>
 <ul class="notes">${s.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>
 ${s.sections.map(table).join('\n')}
-<footer>Made with Fete Till</footer>
+<footer>Made with Cash Tin</footer>
 </body></html>`;
 }

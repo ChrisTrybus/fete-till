@@ -65,11 +65,11 @@ export default function EventScreen() {
           <Text selectable style={{ color: t.ink, fontSize: 44, fontWeight: '800', letterSpacing: 6, textAlign: 'center' }}>
             {spaced}
           </Text>
-          <Body muted>Other volunteers open Fete Till, tap Join event and enter this code. Their sales add into the day total.</Body>
+          <Body muted>Other volunteers open Cash Tin, tap Join event and enter this code. Their sales add into the day total.</Body>
           <Button
             title="Share code"
             onPress={() =>
-              Share.share({ message: `Join "${session.eventName}" on Fete Till with code ${session.code}` }).catch(() => {})
+              Share.share({ message: `Join "${session.eventName}" on Cash Tin with code ${session.code}` }).catch(() => {})
             }
           />
         </Card>
@@ -95,7 +95,7 @@ export default function EventScreen() {
             <Button
               title="Save code somewhere safe"
               onPress={() =>
-                Share.share({ message: `Organiser code for "${session.eventName}" on Fete Till: ${session.organiserCode}` }).catch(() => {})
+                Share.share({ message: `Organiser code for "${session.eventName}" on Cash Tin: ${session.organiserCode}` }).catch(() => {})
               }
             />
           </Card>
