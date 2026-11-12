@@ -5,12 +5,13 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Row, Stat } from '@/components/figures';
 import { Body, Bunting, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
 import { cashToCount } from '@/lib/floats';
+import { giftAidCsv, giftAidTotals } from '@/lib/giftaid';
 import { deletePastEvent, loadPastEvent } from '@/lib/history';
 import { formatPence } from '@/lib/money';
 import { sharePdf } from '@/lib/share-pdf';
 import { summaryHtml, summaryText } from '@/lib/summary';
 import { salesToCsv, summarise } from '@/lib/totals';
-import type { PastEvent, Sale } from '@/lib/types';
+import type { GiftAidDeclaration, PastEvent, Sale } from '@/lib/types';
 
 const day = (ms: number) => new Date(ms).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -20,7 +21,7 @@ const back = () => (router.canGoBack() ? router.back() : router.replace('/histor
 export default function PastEventScreen() {
   const t = useTheme();
   const { id } = useLocalSearchParams<{ id: string }>();
-  const [loaded, setLoaded] = useState<{ event: PastEvent; sales: Sale[] } | null | 'missing'>(null);
+  const [loaded, setLoaded] = useState<{ event: PastEvent; sales: Sale[]; giftAid: GiftAidDeclaration[] } | null | 'missing'>(null);
   const [pdfBusy, setPdfBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -38,6 +39,8 @@ export default function PastEventScreen() {
   const event = loaded && loaded !== 'missing' ? loaded.event : null;
   const list = useMemo(() => (loaded && loaded !== 'missing' ? [...loaded.sales].sort((a, b) => b.at - a.at) : []), [loaded]);
   const totals = useMemo(() => summarise(list), [list]);
+  const declarations = useMemo(() => (loaded && loaded !== 'missing' ? loaded.giftAid : []), [loaded]);
+  const aid = useMemo(() => giftAidTotals(list, declarations), [list, declarations]);
 
   if (!event) {
     return (
@@ -67,7 +70,9 @@ export default function PastEventScreen() {
     closedAt: event.closedAt ?? event.endedAt,
     savedTotals: list.length ? undefined : { takings: event.takings, cash: event.cash, card: event.card, count: event.count },
     floats: event.floats,
+    giftAid: declarations,
   };
+  const exportGiftAid = () => Share.share({ title: `${event.name} Gift Aid`, message: giftAidCsv(list, declarations) }).catch(() => {});
   const shareSummary = () => Share.share({ title: `${event.name}: end-of-day summary`, message: summaryText(summary) }).catch(() => {});
   const exportCsv = () => Share.share({ title: `${event.name} sales`, message: salesToCsv(list) }).catch(() => {});
   const sharePdfSummary = async () => {
@@ -137,6 +142,21 @@ export default function PastEventScreen() {
                 ))}
               </>
             )}
+          </Card>
+        )}
+
+        {(aid.donations > 0 || aid.count > 0) && (
+          <Card>
+            <Heading>Gift Aid</Heading>
+            <Row header cells={['', 'Amount']} />
+            <Row cells={['Donations taken', formatPence(aid.donations)]} />
+            <Row cells={[`With a declaration (${aid.count})`, formatPence(aid.declared)]} />
+            <Row cells={['Gift Aid to claim', formatPence(aid.claimable)]} />
+            <Body muted>
+              Keep the declarations for as long as HMRC may ask about the claim. The export holds donors’ names and addresses.
+              {event.mode === 'cloud' ? ' It has the declarations this phone had when it left the event.' : ''}
+            </Body>
+            <Button title="Export Gift Aid declarations" disabled={!aid.count} onPress={exportGiftAid} />
           </Card>
         )}
 

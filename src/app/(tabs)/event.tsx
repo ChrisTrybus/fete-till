@@ -1,13 +1,16 @@
 import { router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Share, Text, View } from 'react-native';
-import { Body, Button, Card, Field, Heading, Label, useTheme } from '@/components/ui';
+import { Body, Button, Card, Choice, Field, Heading, Label, useTheme } from '@/components/ui';
 import { formatPence, parsePounds } from '@/lib/money';
-import { useStore } from '@/lib/store';
+import { useStore, type CardMode } from '@/lib/store';
+import { sumupAvailable, sumupUnavailableReason } from '@/lib/sumup-open';
 import type { OutboxOp } from '@/lib/types';
 
 const describe = (op: OutboxOp) =>
-  op.kind === 'items'
+  op.kind === 'giftAid'
+    ? `Gift Aid declaration for ${formatPence(op.declaration.amount)}`
+    : op.kind === 'items'
     ? 'Price list changes'
     : op.kind === 'sale'
       ? `Sale of ${formatPence(op.sale.total)} at ${new Date(op.sale.at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
@@ -20,7 +23,9 @@ const describe = (op: OutboxOp) =>
         : 'Restoring a voided sale';
 
 const advice = (op: OutboxOp) =>
-  op.kind === 'items'
+  op.kind === 'giftAid'
+    ? 'It stays in this phone’s Gift Aid figures either way. Discard stops trying to send it to the organiser.'
+    : op.kind === 'items'
     ? 'If you are an organiser, fix it on the Price list tab and save again. Otherwise discard to go back to the list the other tills have.'
     : op.kind === 'sale'
       ? 'It stays in this phone’s Day total and CSV export. If it should not count, void it on the Day total tab.'
@@ -31,7 +36,7 @@ const advice = (op: OutboxOp) =>
 /** Join code to share, this till's name, sync details, and leaving the event. */
 export default function EventScreen() {
   const t = useTheme();
-  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setFloat } =
+  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setFloat, cardMode, setCardMode, pendingCard } =
     useStore();
   const [confirmClose, setConfirmClose] = useState(false);
   const [organiserCode, setOrganiserCode] = useState('');
@@ -177,6 +182,30 @@ export default function EventScreen() {
         ) : null}
       </Card>
 
+      <Card>
+        <Label>Card payments</Label>
+        {sumupAvailable ? (
+          <>
+            <Choice<CardMode>
+              options={[
+                { value: 'record', title: 'Record only', detail: 'Take the card on your own reader, then tap Card.' },
+                { value: 'sumup', title: 'SumUp app', detail: 'The till opens SumUp with the amount and records the sale when it’s paid.' },
+              ]}
+              value={cardMode}
+              onChange={setCardMode}
+            />
+            {cardMode === 'sumup' && (
+              <Body muted>
+                Install the SumUp app on this phone and log in to your stall’s SumUp account. Payments go straight to that account.
+                SumUp needs signal to take a card.
+              </Body>
+            )}
+          </>
+        ) : (
+          <Body muted>Take the card on your own reader, then tap Card to record the sale. {sumupUnavailableReason()}</Body>
+        )}
+      </Card>
+
       {session.closedAt ? (
         <Card style={{ borderColor: t.accent }}>
           <Label>Event closed</Label>
@@ -255,6 +284,11 @@ export default function EventScreen() {
               : 'Leaving ends the event on this phone.'}{' '}
           The sales on this phone are kept under Past events.
         </Body>
+        {pendingCard && (
+          <Text style={{ color: t.danger, fontWeight: '700' }}>
+            A card payment of {formatPence(pendingCard.total)} is still with the SumUp app. Settle it on the Till tab before leaving.
+          </Text>
+        )}
         {leaveFailed && (
           <Text style={{ color: t.danger, fontWeight: '700' }}>
             Couldn’t save this event to Past events. Export the sales from Day total first, or leave without saving.
@@ -264,7 +298,7 @@ export default function EventScreen() {
           <Button
             title={leaving ? 'Leaving…' : leaveFailed ? 'Leave without saving' : confirmLeave ? 'Tap again to leave' : 'Leave event'}
             kind="danger"
-            disabled={leaving}
+            disabled={leaving || Boolean(pendingCard)}
             onPress={() => (confirmLeave ? leave() : setConfirmLeave(true))}
           />
           <Button title="Past events" onPress={() => router.push('/history')} />

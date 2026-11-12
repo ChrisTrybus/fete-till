@@ -101,9 +101,9 @@ describe('day totals', () => {
       sale({ id: 'early', at: Date.UTC(2026, 5, 20, 12, 0), method: 'card', lines: [{ itemId: 't', name: 'Tea', price: 80, qty: 1 }] }),
     ]).split('\n');
     expect(csv).toEqual([
-      '"Time","Till","Payment","Item","Qty","Unit price","Line total","Voided"',
-      '"2026-06-20T12:00:00.000Z","Cake stall","card","Tea","1","0.80","0.80","no"',
-      '"2026-06-20T14:00:00.000Z","Cake stall","cash","Jam ""special""","2","2.50","5.00","yes"',
+      '"Time","Till","Payment","Item","Qty","Unit price","Line total","Voided","Card reference"',
+      '"2026-06-20T12:00:00.000Z","Cake stall","card","Tea","1","0.80","0.80","no",""',
+      '"2026-06-20T14:00:00.000Z","Cake stall","cash","Jam ""special""","2","2.50","5.00","yes",""',
     ]);
   });
 });

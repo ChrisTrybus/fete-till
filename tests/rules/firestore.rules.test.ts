@@ -364,3 +364,65 @@ describe('sales', () => {
     await assertFails(deleteDoc(saleRef(ORGANISER, 'sale1')));
   });
 });
+
+describe('Gift Aid declarations', () => {
+  const ref = (uid: string, id: string) => doc(as(uid), 'events', EVENT, 'giftAid', id);
+  const declaration = (saleId: string, createdBy: string, extra: Record<string, unknown> = {}) => ({
+    saleId,
+    at: 1700000000000,
+    donatedAt: 1699990000000,
+    amount: 500,
+    firstName: 'Ada',
+    lastName: 'Lovelace',
+    house: '12',
+    postcode: 'SW1A 1AA',
+    tillName: 'Cake stall',
+    deviceId: 'device-1',
+    createdBy,
+    ...extra,
+  });
+
+  test('any till can add one, but only an organiser can read them back', async () => {
+    await assertSucceeds(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER)));
+    await assertFails(getDoc(ref(MEMBER, 'sale1')));
+    await assertFails(getDocs(collection(as(OTHER_MEMBER), 'events', EVENT, 'giftAid')));
+    await assertSucceeds(getDoc(ref(ORGANISER, 'sale1')));
+    await assertSucceeds(getDocs(collection(as(ORGANISER), 'events', EVENT, 'giftAid')));
+  });
+
+  test('non-members can neither add nor read them', async () => {
+    await assertFails(setDoc(ref(STRANGER, 'sale1'), declaration('sale1', STRANGER)));
+    await assertFails(getDocs(collection(as(STRANGER), 'events', EVENT, 'giftAid')));
+  });
+
+  test('a declaration must carry its own sale id, the sender’s id, and only the expected fields', async () => {
+    await assertFails(setDoc(ref(MEMBER, 'sale1'), declaration('other-sale', MEMBER)));
+    await assertFails(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', ORGANISER)));
+    await assertFails(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER, { email: 'ada@example.com' })));
+  });
+
+  test('the amount and the donor’s details must be filled in and within HMRC’s lengths', async () => {
+    await assertFails(setDoc(ref(MEMBER, 'a'), declaration('a', MEMBER, { amount: 0 })));
+    await assertFails(setDoc(ref(MEMBER, 'b'), declaration('b', MEMBER, { amount: 2.5 })));
+    await assertFails(setDoc(ref(MEMBER, 'c'), declaration('c', MEMBER, { firstName: '' })));
+    await assertFails(setDoc(ref(MEMBER, 'd'), declaration('d', MEMBER, { lastName: 'x'.repeat(36) })));
+    await assertFails(setDoc(ref(MEMBER, 'e'), declaration('e', MEMBER, { house: '' })));
+    await assertFails(setDoc(ref(MEMBER, 'f'), declaration('f', MEMBER, { postcode: 'NOT A POSTCODE' })));
+    await assertFails(setDoc(ref(MEMBER, 'g'), declaration('g', MEMBER, { donatedAt: 'yesterday' })));
+  });
+
+  test('resending the same declaration is accepted, but changing one is not', async () => {
+    await assertSucceeds(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER)));
+    await assertSucceeds(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER)));
+    // After a restart the phone may have a new sign-in; the same declaration still goes through.
+    await assertSucceeds(setDoc(ref(OTHER_MEMBER, 'sale1'), declaration('sale1', OTHER_MEMBER)));
+    await assertFails(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER, { postcode: 'EC1A 1BB' })));
+    await assertFails(updateDoc(ref(ORGANISER, 'sale1'), { amount: 1 }));
+  });
+
+  test('a declaration cannot be deleted', async () => {
+    await assertSucceeds(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER)));
+    await assertFails(deleteDoc(ref(MEMBER, 'sale1')));
+    await assertFails(deleteDoc(ref(ORGANISER, 'sale1')));
+  });
+});

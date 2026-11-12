@@ -91,9 +91,29 @@ Still to do:
 
 ## Phase 3: nice to have
 
-1. Card payments through SumUp or Stripe Terminal tap-to-pay.
-2. Gift Aid prompts for donations.
-3. Running totals per till on the organiser's phone (a live leaderboard tends to motivate stalls).
+Done:
+
+- Gift Aid. On the Price list tab ("Set categories, colours and donations") an item can be marked as a donation. Gift Aid only applies to donations, so a sale's purchases never count. After a sale with a donation the till asks "Gift Aid it?", showing the extra 25p in the pound. Yes takes the donor's first and last name, house name or number and postcode, shows the HMRC-style declaration, and saves when the donor agrees. The sale is saved first, so the question never holds up the money. A donor who comes back later can be added from the sale on Day total ("Add Gift Aid", for this phone's own sales). Day total has a Gift Aid card (donations taken, declared, Gift Aid to claim) and organisers can export the declarations as CSV in the columns of HMRC's Gift Aid schedule. Voided sales drop out. The end-of-day summary gives the totals but never a donor's details. Declarations are kept with Past events and can be exported from there.
+- In a shared event, declarations go to `events/{id}/giftAid/{saleId}` through the outbox like any other change. The rules let any till add one and only organisers read them, since they hold names and addresses. They can't be edited or deleted; resending the same one is accepted. A refused declaration is set aside on the Event tab; discarding it stops the sending but keeps it in this phone's figures.
+- Leaderboard. Organisers in a shared event get "Show leaderboard" on Day total: every till ranked by takings with a bar against the leader, sales count and time since its last sale. Tills that have joined but not sold yet are listed at the bottom; ties share a place. It updates as sales sync, keeps the screen awake, is laid out large on tablets, and "Share standings" sends a short text for the volunteers' group chat.
+
+Not yet checked:
+
+- Deploy `firestore.rules` before using a build with Gift Aid in a shared event. Until then every declaration is refused and set aside (the sales are unaffected). The 6 new rules tests pass in the emulator (47 in all).
+- The organiser receiving other tills' declarations has only run against the fake server in the automated tests.
+- The leaderboard was checked in a browser with made-up sales from other tills, not in a real shared event.
+- The Gift Aid prompt was checked in a browser on a this-phone-only event, not on a device (keyboard, autofill of name and postcode).
+- The declaration wording follows HMRC's model declaration and the export follows the schedule's columns. Have the charity's treasurer check both before a real claim. The phone's copy in Past events is not a substitute for the charity keeping its own records.
+
+- Card payments through SumUp, using SumUp's Payment Switch. On the Event tab a phone chooses "Record only" (as before) or "SumUp app". With SumUp, the Card button reads "SumUp": it opens the SumUp app with the amount, the volunteer takes the card there (on a SumUp reader, or Tap to Pay if their account has it), and SumUp sends them back to `fetetill://sumup-callback`. A paid result records the card sale with SumUp's transaction code; a declined one records nothing and keeps the cart. Each stall logs in to its own SumUp account, so the money goes straight to it, with no server and no native module. The payment's id is sent to SumUp and becomes the sale's id, so one payment can only ever record one sale. The waiting payment is saved, so the phone closing the app while SumUp is open loses nothing. While it waits, the till is covered; if SumUp never reports back, the volunteer checks the SumUp app and taps "It was paid" (recorded, marked "check in SumUp") or "It wasn't paid". The SumUp reference shows on Day total and in the CSV. A card payment with a donation is followed by the Gift Aid prompt. Leaving the event is blocked while a payment is with SumUp.
+
+Not yet checked (SumUp):
+
+- Nothing has run against the real SumUp app. It needs an affiliate key (a SumUp account > Settings > For developers > Affiliate Keys, for the app id `com.fetetill.app`) set as `EXPO_PUBLIC_SUMUP_AFFILIATE_KEY`, a build with it, and a phone with the SumUp app logged in to a UK account. Until the key is set, the Card button records card sales as before. In a browser SumUp isn't offered.
+- The return to `/sumup-callback`, the waiting screen, settling by hand, and the Gift Aid prompt after a card payment were checked in a browser by opening the return link by hand. On a phone, check that SumUp's return reopens the app on the till, both while it is running and after the OS has closed it.
+- SumUp says Payment Switch is no longer actively developed and recommends its native SDKs. Those have no React Native version, so moving to them means writing an Expo native module for SumUp's iOS and Android SDKs, then a development build. The till only talks to SumUp through `src/lib/sumup-open.ts`, so that is the one place to change.
+
+Nothing is left to build in this phase.
 
 ## Cost notes
 

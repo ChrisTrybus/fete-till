@@ -10,8 +10,11 @@ import React, { createContext, useCallback, useContext, useEffect, useMemo, useR
 import * as Cloud from './cloud';
 import { cloudEnabled } from './firebase';
 import { tillFloats } from './floats';
+import { donationIn, normalisePostcode, type DeclarationFields } from './giftaid';
 import { savePastEvent } from './history';
-import type { Item, Member, OutboxOp, ParkedOp, PaymentMethod, Sale, SaleLine, Session, TillFloat } from './types';
+import { formatPence } from './money';
+import type { CardResult, PendingCard, SumupCallback } from './sumup';
+import type { GiftAidDeclaration, Item, Member, OutboxOp, ParkedOp, PaymentMethod, Sale, SaleLine, Session, TillFloat } from './types';
 
 const STORAGE_KEY = 'fetetill:v1';
 const FLUSH_INTERVAL_MS = 15000;
@@ -35,7 +38,20 @@ type Persisted = {
   outOfStock: string[];
   // The price list from the last event this phone ran, offered when starting the next one.
   lastItems: Item[] | null;
+  // Gift Aid declarations by sale id: those taken on this phone and, on an
+  // organiser's phone, those taken on every till.
+  giftAid: Record<string, GiftAidDeclaration>;
+  // How this phone takes card payments: handed to the SumUp app, or taken some other
+  // way and just recorded. Kept on this phone across events.
+  cardMode: CardMode;
+  // A card payment handed to the SumUp app and not yet heard back about. Saved so a
+  // payment isn't lost if the phone closes this app while SumUp is in front.
+  pendingCard: PendingCard | null;
+  // How the last SumUp payment ended, until the till has shown it.
+  cardResult: CardResult | null;
 };
+
+export type CardMode = 'record' | 'sumup';
 
 export type SyncStatus = 'local' | 'synced' | 'sending' | 'waiting' | 'attention';
 
@@ -70,12 +86,26 @@ type Store = Persisted & {
   setClosed: (closed: boolean) => void;
   recordSale: (lines: SaleLine[], method: PaymentMethod, tendered: number) => Sale;
   setVoided: (saleId: string, voided: boolean) => void;
+  /**
+   * Records a donor's Gift Aid declaration against a sale that included a donation.
+   * Throws if the sale has no donation in it.
+   */
+  recordGiftAid: (saleId: string, donor: DeclarationFields) => GiftAidDeclaration;
+  setCardMode: (mode: CardMode) => void;
+  /** Sets aside a card payment that is about to be handed to the SumUp app. Nothing is recorded until it is paid. */
+  beginCardPayment: (lines: SaleLine[]) => PendingCard;
+  /** Takes the result SumUp sent back. A success records the sale, once, whatever happens to the phone in between. */
+  finishCardPayment: (result: SumupCallback) => void;
+  /** For when SumUp never reported back: the volunteer checked the SumUp app and says whether it was paid. */
+  settlePendingCard: (paid: boolean) => void;
+  clearCardResult: () => void;
   flushNow: () => void;
   /** Puts a refused change back in the queue to try again. */
   retryParked: (id: string) => void;
   /**
    * Drops a refused price list, close or void, going back to what the other tills have. Sales are
    * never dropped. A price list or close stays set aside until this phone has heard the shared one.
+   * A refused Gift Aid declaration stops being sent but stays on this phone.
    */
   discardParked: (id: string) => void;
 };
@@ -109,6 +139,7 @@ function refusalReason(op: OutboxOp, organiser: boolean): string {
       : 'The event would not accept this sale.';
   }
   if (op.kind === 'close') return organiser ? 'The event would not accept this change.' : 'Only the organiser can close or reopen the event.';
+  if (op.kind === 'giftAid') return 'The event would not accept this Gift Aid declaration.';
   return organiser ? 'The event would not accept this change.' : 'Only the organiser can void or restore another till’s sale.';
 }
 
@@ -118,7 +149,8 @@ function park(s: Persisted, op: OutboxOp): Persisted {
     (op.kind === 'items' && o.kind === 'items') ||
     (op.kind === 'close' && o.kind === 'close') ||
     (op.kind === 'void' && o.kind === 'void' && o.saleId === op.saleId) ||
-    (op.kind === 'sale' && o.kind === 'sale' && o.sale.id === op.sale.id);
+    (op.kind === 'sale' && o.kind === 'sale' && o.sale.id === op.sale.id) ||
+    (op.kind === 'giftAid' && o.kind === 'giftAid' && o.declaration.saleId === op.declaration.saleId);
   return {
     ...s,
     // Voids of a parked sale can't be sent on their own. The sale carries its
@@ -137,7 +169,7 @@ export function useStore() {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], members: [], outOfStock: [], lastItems: null });
+  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], members: [], outOfStock: [], lastItems: null, giftAid: {}, cardMode: 'record', pendingCard: null, cardResult: null });
   const [loaded, setLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -148,6 +180,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const stateRef = useRef(state);
   const flushing = useRef(false);
   const memberOk = useRef<string | null>(null); // eventId we've confirmed membership for this run
+  // The same, as state, so listeners that need this phone's registration (and organiser
+  // claim) to have reached the server can wait for it. Never cleared within an event:
+  // a rename re-registers the same phone, which keeps its access throughout.
+  const [registeredEvent, setRegisteredEvent] = useState<string | null>(null);
+  const markRegistered = useCallback((eventId: string) => {
+    memberOk.current = eventId;
+    setRegisteredEvent(eventId);
+  }, []);
+  // Bumped to start the Gift Aid listener again after the server ended it with an error.
+  const [giftAidRetry, setGiftAidRetry] = useState(0);
 
   // ---- load & save ----------------------------------------------------------
   useEffect(() => {
@@ -172,6 +214,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         members: saved.members ?? [],
         outOfStock: saved.outOfStock ?? [],
         lastItems: saved.lastItems ?? null,
+        giftAid: saved.giftAid ?? {},
+        cardMode: saved.cardMode === 'sumup' ? 'sumup' : 'record',
+        pendingCard: saved.pendingCard ?? null,
+        cardResult: saved.cardResult ?? null,
       };
       stateRef.current = initial;
       setState(initial);
@@ -245,7 +291,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // If the till was renamed or its float changed while that was sending, the
         // other tills have the old details, so the next flush registers again.
         const now = stateRef.current.session;
-        if (now?.tillName === session.tillName && now.float === session.float) memberOk.current = session.eventId;
+        if (now?.tillName === session.tillName && now.float === session.float) markRegistered(session.eventId);
       }
       while (stateRef.current.outbox.length) {
         setSyncStatus('sending');
@@ -266,7 +312,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } finally {
       flushing.current = false;
     }
-  }, [update, send, register]);
+  }, [update, send, register, markRegistered]);
 
   const enqueue = useCallback(
     (op: OutboxOp) => {
@@ -328,6 +374,45 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loaded, sessionKey]);
 
+  // Organisers also hear every till's Gift Aid declarations, to make the claim. Nobody
+  // else is allowed to read them, so other phones keep only the ones they took.
+  //
+  // The server checks the organiser role when the listener starts, and ends the listener
+  // for good if it says no. So it waits until this run has registered the phone (which
+  // re-claims the role after a restart brings a new sign-in), and starts again after an error.
+  const organiser = isOrganiserOf(state.session);
+  const registered = registeredEvent !== null && registeredEvent === state.session?.eventId;
+  useEffect(() => {
+    const session = stateRef.current.session;
+    if (!loaded || !session || session.mode === 'local' || !organiser || !registered) return;
+    let unsub: (() => void) | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
+    try {
+      unsub = Cloud.watchGiftAid(
+        session.eventId,
+        (remote) =>
+          update((s) => {
+            if (s.session?.eventId !== session.eventId) return s;
+            const giftAid = { ...s.giftAid };
+            for (const d of remote) giftAid[d.saleId] = d;
+            return { ...s, giftAid };
+          }),
+        // The listener has ended (refused, or the server gave up). Try again on the next retry
+        // interval, so an organiser never quietly stops hearing other tills' declarations.
+        () => {
+          retry = setTimeout(() => setGiftAidRetry((n) => n + 1), FLUSH_INTERVAL_MS);
+        },
+      );
+    } catch {
+      // Firebase not configured: the sales listener above reports it.
+    }
+    return () => {
+      if (retry) clearTimeout(retry);
+      unsub?.();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded, sessionKey, organiser, registered, giftAidRetry]);
+
   // ---- actions --------------------------------------------------------------
   const startLocalEvent = useCallback(
     (name: string, tillName: string, items: Item[] = STARTER_ITEMS) =>
@@ -342,6 +427,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         tills: [],
         members: [],
         outOfStock: [],
+        giftAid: {},
+        pendingCard: null,
+        cardResult: null,
       })),
     [update],
   );
@@ -349,7 +437,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const createCloudEvent = useCallback(
     async (name: string, tillName: string, items: Item[] = STARTER_ITEMS) => {
       const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, items);
-      memberOk.current = eventId;
+      markRegistered(eventId);
       update((s) => ({
         ...s,
         session: { eventId, eventName: name, code, tillName, mode: 'cloud', organiserCode, startedAt: Date.now() },
@@ -360,16 +448,20 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         tills: [],
         members: [],
         outOfStock: [],
+        giftAid: {},
+        pendingCard: null,
+        cardResult: null,
       }));
     },
-    [update],
+    [update, markRegistered],
   );
 
   const joinCloudEvent = useCallback(
     async (code: string, tillName: string) => {
       const ev = await Cloud.joinEvent(code, tillName, stateRef.current.deviceId);
       // A float carried over from an earlier visit is registered again, so the other tills see it against this sign-in.
-      memberOk.current = ev.float ? null : ev.eventId;
+      if (ev.float) memberOk.current = null;
+      else markRegistered(ev.eventId);
       update((s) => ({
         ...s,
         session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), ...(ev.float ? { float: ev.float } : {}) },
@@ -380,18 +472,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         tills: [],
         members: [],
         outOfStock: [],
+        giftAid: {},
+        pendingCard: null,
+        cardResult: null,
       }));
     },
-    [update],
+    [update, markRegistered],
   );
 
   const leaveEvent = useCallback(
     async (opts?: { skipHistory?: boolean }) => {
-      const { session, sales, deviceId, members } = stateRef.current;
+      const { session, sales, deviceId, members, giftAid } = stateRef.current;
       if (!session) return;
       const list = Object.values(sales);
-      // An event with no sales has nothing worth keeping.
-      if (list.length && !opts?.skipHistory) await savePastEvent(session, list, Date.now(), tillFloats(session, deviceId, members));
+      // An event with no sales has nothing worth keeping. Gift Aid declarations go with it:
+      // the charity must keep them for as long as HMRC may ask about the claim.
+      if (list.length && !opts?.skipHistory)
+        await savePastEvent(session, list, Date.now(), tillFloats(session, deviceId, members), Object.values(giftAid));
       update((s) =>
         s.session?.eventId !== session.eventId
           ? s
@@ -405,6 +502,9 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
               tills: [],
               members: [],
               outOfStock: [],
+              giftAid: {},
+              pendingCard: null,
+              cardResult: null,
               // Only a list this phone was in charge of is offered for the next event.
               lastItems: isOrganiserOf(session) && s.items.length ? s.items : s.lastItems,
             },
@@ -484,8 +584,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     [update, enqueue],
   );
 
-  const recordSale = useCallback(
-    (lines: SaleLine[], method: PaymentMethod, tendered: number) => {
+  const addSale = useCallback(
+    (lines: SaleLine[], method: PaymentMethod, tendered: number, extra: Partial<Pick<Sale, 'id' | 'cardRef' | 'cardUnconfirmed'>> = {}) => {
       const { session, deviceId } = stateRef.current;
       const total = lines.reduce((t, l) => t + l.price * l.qty, 0);
       const sale: Sale = {
@@ -498,6 +598,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         tillName: session?.tillName ?? '',
         deviceId,
         voided: false,
+        ...extra,
       };
       update((s) => ({ ...s, sales: { ...s.sales, [sale.id]: sale } }));
       enqueue({ kind: 'sale', sale });
@@ -505,6 +606,79 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     },
     [update, enqueue],
   );
+  const recordSale = useCallback(
+    (lines: SaleLine[], method: PaymentMethod, tendered: number) => addSale(lines, method, tendered),
+    [addSale],
+  );
+
+  const setCardMode = useCallback((cardMode: CardMode) => update((s) => ({ ...s, cardMode })), [update]);
+
+  const beginCardPayment = useCallback(
+    (lines: SaleLine[]) => {
+      const pending: PendingCard = {
+        id: randomUUID(),
+        lines,
+        total: lines.reduce((t, l) => t + l.price * l.qty, 0),
+        startedAt: Date.now(),
+      };
+      update((s) => ({ ...s, pendingCard: pending, cardResult: null }));
+      return pending;
+    },
+    [update],
+  );
+
+  const finishCardPayment = useCallback(
+    (result: SumupCallback) => {
+      const { pendingCard: pending, sales } = stateRef.current;
+      // The same result arriving twice (or after the volunteer settled it by hand) records nothing more.
+      if (result.id && sales[result.id]) return;
+      if (!pending || (result.id && result.id !== pending.id)) {
+        update((s) => ({
+          ...s,
+          cardResult: {
+            id: result.id ?? '',
+            ok: false,
+            message: result.ok
+              ? 'SumUp reported a payment this till wasn’t waiting for, so it hasn’t been recorded. Check the SumUp app’s history.'
+              : result.message,
+          },
+        }));
+        return;
+      }
+      if (result.ok) {
+        // The sale takes the payment's id, so it can only ever be recorded once.
+        addSale(pending.lines, 'card', pending.total, { id: pending.id, ...(result.txCode ? { cardRef: result.txCode } : {}) });
+        update((s) => ({
+          ...s,
+          pendingCard: null,
+          cardResult: { id: pending.id, ok: true, message: `Card payment of ${formatPence(pending.total)} taken.` },
+        }));
+      } else {
+        update((s) => ({ ...s, pendingCard: null, cardResult: { id: pending.id, ok: false, message: `${result.message} Nothing was charged.` } }));
+      }
+    },
+    [update, addSale],
+  );
+
+  const settlePendingCard = useCallback(
+    (paid: boolean) => {
+      const pending = stateRef.current.pendingCard;
+      if (!pending) return;
+      if (paid) addSale(pending.lines, 'card', pending.total, { id: pending.id, cardUnconfirmed: true });
+      update((s) => ({
+        ...s,
+        pendingCard: null,
+        cardResult: {
+          id: pending.id,
+          ok: paid,
+          message: paid ? `Card sale of ${formatPence(pending.total)} recorded.` : 'Card payment cancelled. Nothing was recorded.',
+        },
+      }));
+    },
+    [update, addSale],
+  );
+
+  const clearCardResult = useCallback(() => update((s) => (s.cardResult ? { ...s, cardResult: null } : s)), [update]);
 
   const setVoided = useCallback(
     (saleId: string, voided: boolean) => {
@@ -518,6 +692,37 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       // its voided state with it when it is retried.
       const saleParked = stateRef.current.parked.some((p) => p.op.kind === 'sale' && p.op.sale.id === saleId);
       if (!saleParked) enqueue({ kind: 'void', saleId, voided });
+    },
+    [update, enqueue],
+  );
+
+  const recordGiftAid = useCallback(
+    (saleId: string, donor: DeclarationFields) => {
+      const { session, deviceId, sales } = stateRef.current;
+      const sale = sales[saleId];
+      const amount = sale ? donationIn(sale) : 0;
+      if (!amount) throw new Error('Gift Aid can only be added to a sale that includes a donation.');
+      const declaration: GiftAidDeclaration = {
+        saleId,
+        at: Date.now(),
+        donatedAt: sale.at,
+        amount,
+        firstName: donor.firstName.trim(),
+        lastName: donor.lastName.trim(),
+        house: donor.house.trim(),
+        postcode: normalisePostcode(donor.postcode) ?? donor.postcode.trim().toUpperCase(),
+        tillName: session?.tillName ?? '',
+        deviceId,
+      };
+      update((s) => ({
+        ...s,
+        giftAid: { ...s.giftAid, [saleId]: declaration },
+        // A corrected declaration replaces one still waiting or refused.
+        outbox: s.outbox.filter((o) => !(o.kind === 'giftAid' && o.declaration.saleId === saleId)),
+        parked: s.parked.filter((p) => !(p.op.kind === 'giftAid' && p.op.declaration.saleId === saleId)),
+      }));
+      enqueue({ kind: 'giftAid', declaration });
+      return declaration;
     },
     [update, enqueue],
   );
@@ -543,6 +748,8 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const { op } = entry;
       update((s) => {
         const parked = s.parked.filter((p) => p.id !== id);
+        // The declaration stays on this phone, in its Gift Aid export. It just isn't sent.
+        if (op.kind === 'giftAid') return { ...s, parked };
         if (op.kind === 'void') {
           const sale = s.sales[op.saleId];
           return { ...s, parked, sales: sale ? { ...s.sales, [op.saleId]: { ...sale, voided: !op.voided } } : s.sales };
@@ -580,11 +787,43 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setClosed,
       recordSale,
       setVoided,
+      recordGiftAid,
+      setCardMode,
+      beginCardPayment,
+      finishCardPayment,
+      settlePendingCard,
+      clearCardResult,
       flushNow: () => void flush(),
       retryParked,
       discardParked,
     }),
-    [state, loaded, syncStatus, syncError, startLocalEvent, createCloudEvent, joinCloudEvent, leaveEvent, claimOrganiser, setTillName, setFloat, setItems, setOutOfStock, setClosed, recordSale, setVoided, flush, retryParked, discardParked],
+    [
+      state,
+      loaded,
+      syncStatus,
+      syncError,
+      startLocalEvent,
+      createCloudEvent,
+      joinCloudEvent,
+      leaveEvent,
+      claimOrganiser,
+      setTillName,
+      setFloat,
+      setItems,
+      setOutOfStock,
+      setClosed,
+      recordSale,
+      setVoided,
+      recordGiftAid,
+      setCardMode,
+      beginCardPayment,
+      finishCardPayment,
+      settlePendingCard,
+      clearCardResult,
+      flush,
+      retryParked,
+      discardParked,
+    ],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

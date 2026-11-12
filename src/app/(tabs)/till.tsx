@@ -1,20 +1,38 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect } from 'expo-router';
-import { useCallback, useMemo, useState } from 'react';
-import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Modal, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { GiftAidPrompt } from '@/components/gift-aid';
 import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
 import { groupByCategory, tileColours } from '@/lib/categories';
 import { saleFeedback, tapFeedback } from '@/lib/haptics';
 import { CASH_BUTTONS, cashLabel, formatPence } from '@/lib/money';
 import { useStore } from '@/lib/store';
+import { openSumup, sumupAvailable } from '@/lib/sumup-open';
 import { soldOnTill } from '@/lib/tills';
-import type { Item, SaleLine } from '@/lib/types';
+import type { Item, Sale, SaleLine } from '@/lib/types';
 
 const KEEP_AWAKE_TAG = 'till';
 
 export default function Till() {
   const t = useTheme();
-  const { items, recordSale, session, isOrganiser, outOfStock, setOutOfStock } = useStore();
+  const {
+    items,
+    recordSale,
+    session,
+    isOrganiser,
+    outOfStock,
+    setOutOfStock,
+    sales,
+    cardMode,
+    pendingCard,
+    cardResult,
+    beginCardPayment,
+    settlePendingCard,
+    clearCardResult,
+  } = useStore();
+  // Card payments go through the SumUp app when this phone is set up for it; otherwise the Card button just records the sale.
+  const viaSumup = cardMode === 'sumup' && sumupAvailable;
   // What this till sells. Anything it has run out of is tucked away below the rest.
   const tillName = session?.tillName ?? '';
   const mine = useMemo(() => items.filter((i) => soldOnTill(i, tillName)), [items, tillName]);
@@ -48,12 +66,14 @@ export default function Till() {
   const [cart, setCart] = useState<Record<string, number>>({});
   const [tendered, setTendered] = useState(0);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
+  // A sale with a donation in it, whose donor is being asked about Gift Aid.
+  const [giftAidFor, setGiftAidFor] = useState<Sale | null>(null);
 
   const lines: SaleLine[] = useMemo(
     () =>
       Object.entries(cart).flatMap(([itemId, qty]) => {
         const it = inStock.find((i) => i.id === itemId);
-        return it && qty > 0 ? [{ itemId, name: it.name, price: it.price, qty }] : [];
+        return it && qty > 0 ? [{ itemId, name: it.name, price: it.price, qty, ...(it.donation ? { donation: true } : {}) }] : [];
       }),
     [cart, inStock],
   );
@@ -83,12 +103,60 @@ export default function Till() {
     if (out) setCart(({ [it.id]: _gone, ...rest }) => rest);
     setLastMessage(out ? `${it.name} is out of stock, so it’s hidden.` : `${it.name} is back in stock.`);
   };
+  // A SumUp payment has finished: on success the sale is already recorded, so clear the
+  // cart; on failure keep it, to try again or take cash instead.
+  useEffect(() => {
+    if (!cardResult) return;
+    // The result comes from outside the app (SumUp, through the return link), and is handled once, then cleared.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setLastMessage(cardResult.message);
+    const sale = cardResult.ok ? sales[cardResult.id] : undefined;
+    if (sale) {
+      saleFeedback();
+      setCart({});
+      setTendered(0);
+      if (sale.lines.some((l) => l.donation)) setGiftAidFor(sale);
+    }
+    clearCardResult();
+  }, [cardResult, sales, clearCardResult]);
+
+  const payBySumup = async () => {
+    const pending = beginCardPayment(lines);
+    try {
+      await openSumup({ id: pending.id, total: pending.total, title: [session?.eventName, session?.tillName].filter(Boolean).join(' · ') });
+    } catch (e) {
+      // SumUp never opened, so nothing can have been charged.
+      settlePendingCard(false);
+      clearCardResult();
+      setLastMessage(e instanceof Error ? e.message : 'Couldn’t open the SumUp app.');
+    }
+  };
+
   const complete = (method: 'cash' | 'card') => {
-    recordSale(lines, method, tendered);
+    if (method === 'card' && viaSumup) {
+      void payBySumup();
+      return;
+    }
+    const sale = recordSale(lines, method, tendered);
     saleFeedback();
     setLastMessage(method === 'cash' ? `Saved. Give ${formatPence(change)} change.` : `Card sale saved: ${formatPence(total)}.`);
     clear();
+    // The sale is saved first, so asking about Gift Aid never holds up the money.
+    if (lines.some((l) => l.donation)) setGiftAidFor(sale);
   };
+  const giftAidDone = (message: string | null) => {
+    if (message) {
+      saleFeedback();
+      setLastMessage(message);
+    }
+    setGiftAidFor(null);
+  };
+  const giftAidPrompt = (
+    <>
+      <GiftAidPrompt sale={giftAidFor} onDone={giftAidDone} />
+      <PendingCardPrompt />
+    </>
+  );
 
   const tile = (it: Item) => {
         const out = outOfStock.includes(it.id);
@@ -283,7 +351,7 @@ export default function Till() {
       </View>
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Button title="Card" disabled={!total} onPress={() => complete('card')} style={{ flex: 1 }} />
+        <Button title={viaSumup ? 'SumUp' : 'Card'} disabled={!total || Boolean(pendingCard)} onPress={() => complete('card')} style={{ flex: 1 }} />
         <Button
           title={total && !tendered ? 'Enter cash' : 'Complete cash sale'}
           kind="primary"
@@ -305,6 +373,8 @@ export default function Till() {
             {isOrganiser ? 'Closed by mistake? You can reopen it on the Event tab.' : 'If it was closed by mistake, the organiser can reopen it.'}
           </Body>
         </Card>
+        {/* A card payment can still be with SumUp when the event closes; it must still be settled. */}
+        <PendingCardPrompt />
       </ScrollView>
     );
   }
@@ -321,6 +391,7 @@ export default function Till() {
             {checkout}
           </Card>
         </View>
+        {giftAidPrompt}
       </ScrollView>
     );
   }
@@ -338,6 +409,7 @@ export default function Till() {
           </ScrollView>
           {checkout}
         </Card>
+        {giftAidPrompt}
       </View>
     );
   }
@@ -358,7 +430,56 @@ export default function Till() {
         </View>
         {checkout}
       </View>
+      {giftAidPrompt}
     </View>
+  );
+}
+
+/**
+ * Covers the till while a card payment is with the SumUp app, so the same sale can't be
+ * taken twice. SumUp normally brings the volunteer back and this closes by itself. If it
+ * doesn't (the phone closed this app, or the volunteer came back by hand), they check
+ * the SumUp app and say what happened.
+ */
+function PendingCardPrompt() {
+  const { pendingCard, settlePendingCard } = useStore();
+  const [confirmPaid, setConfirmPaid] = useState(false);
+  const pending = pendingCard;
+  return (
+    <Modal visible={pending !== null} transparent animationType="fade" onRequestClose={() => {}}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center', padding: 16 }}>
+        {pending && (
+          <Card style={{ maxWidth: 520, width: '100%', alignSelf: 'center' }}>
+            <Heading>Card payment of {formatPence(pending.total)}</Heading>
+            <Body>Take the card in the SumUp app. You’ll come back here when it’s done.</Body>
+            <Body muted>
+              If SumUp didn’t bring you back, open the SumUp app and check its sales history, then say whether this payment went
+              through.
+            </Body>
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              <Button
+                title="It wasn’t paid"
+                onPress={() => {
+                  setConfirmPaid(false);
+                  settlePendingCard(false);
+                }}
+                style={{ flex: 1 }}
+              />
+              <Button
+                title={confirmPaid ? 'Tap again to record' : 'It was paid'}
+                kind="primary"
+                onPress={() => {
+                  if (!confirmPaid) return setConfirmPaid(true);
+                  setConfirmPaid(false);
+                  settlePendingCard(true);
+                }}
+                style={{ flex: 1 }}
+              />
+            </View>
+          </Card>
+        )}
+      </View>
+    </Modal>
   );
 }
 

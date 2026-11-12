@@ -12,6 +12,8 @@ export type Item = {
   // The colour of the item's tile on the till: one of COLOURS in categories.ts.
   // Items in one category share a colour. Left out to have one picked automatically.
   colour?: string;
+  // A donation rather than something bought. Only donations can have Gift Aid claimed on them.
+  donation?: boolean;
 };
 
 export type SaleLine = {
@@ -19,6 +21,7 @@ export type SaleLine = {
   name: string; // copied at sale time so later price-list edits don't rewrite history
   price: number; // pence, copied at sale time
   qty: number;
+  donation?: boolean; // copied from the item at sale time
 };
 
 export type PaymentMethod = 'cash' | 'card';
@@ -33,6 +36,11 @@ export type Sale = {
   tillName: string;
   deviceId: string;
   voided: boolean;
+  // Card sales taken through the SumUp app: SumUp's transaction code, for matching
+  // against the SumUp account. Missing when the volunteer confirmed the payment by hand.
+  cardRef?: string;
+  // Set when SumUp never reported back and the volunteer said the payment went through.
+  cardUnconfirmed?: boolean;
 };
 
 export type Session = {
@@ -79,12 +87,30 @@ export type PastEvent = {
   floats?: TillFloat[];
 };
 
+// A donor's Gift Aid declaration, taken on the till after a sale that included a donation.
+// It holds a name and address, so in a shared event only organisers can read it back.
+export type GiftAidDeclaration = {
+  saleId: string; // the sale holding the donation; also the Firestore doc id
+  at: number; // when the declaration was made (epoch ms)
+  // When the donation was taken: the sale's time (epoch ms). HMRC's schedule wants this
+  // date, which differs from `at` when a donor comes back later. Missing on older saves.
+  donatedAt?: number;
+  amount: number; // the donation in the sale (pence); purchases in the same sale don't count
+  firstName: string;
+  lastName: string;
+  house: string; // house name or number
+  postcode: string;
+  tillName: string;
+  deviceId: string;
+};
+
 // Writes waiting to reach Firestore. Processed in order; each is safe to retry.
 export type OutboxOp =
   | { kind: 'sale'; sale: Sale }
   | { kind: 'void'; saleId: string; voided: boolean }
   | { kind: 'items'; items: Item[] }
-  | { kind: 'close'; closedAt: number | null }; // null reopens the event
+  | { kind: 'close'; closedAt: number | null } // null reopens the event
+  | { kind: 'giftAid'; declaration: GiftAidDeclaration };
 
 // A change the server refused outright (not a lost connection). It is set aside so
 // the changes queued behind it can still send, and stays on the phone until the
