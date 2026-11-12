@@ -92,6 +92,9 @@ export type PastEvent = {
 export type GiftAidDeclaration = {
   saleId: string; // the sale holding the donation; also the Firestore doc id
   at: number; // when the declaration was made (epoch ms)
+  // When the donation was taken: the sale's time (epoch ms). HMRC's schedule wants this
+  // date, which differs from `at` when a donor comes back later. Missing on older saves.
+  donatedAt?: number;
   amount: number; // the donation in the sale (pence); purchases in the same sale don't count
   firstName: string;
   lastName: string;

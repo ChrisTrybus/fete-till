@@ -180,6 +180,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const stateRef = useRef(state);
   const flushing = useRef(false);
   const memberOk = useRef<string | null>(null); // eventId we've confirmed membership for this run
+  // The same, as state, so listeners that need this phone's registration (and organiser
+  // claim) to have reached the server can wait for it. Never cleared within an event:
+  // a rename re-registers the same phone, which keeps its access throughout.
+  const [registeredEvent, setRegisteredEvent] = useState<string | null>(null);
+  const markRegistered = useCallback((eventId: string) => {
+    memberOk.current = eventId;
+    setRegisteredEvent(eventId);
+  }, []);
+  // Bumped to start the Gift Aid listener again after the server ended it with an error.
+  const [giftAidRetry, setGiftAidRetry] = useState(0);
 
   // ---- load & save ----------------------------------------------------------
   useEffect(() => {
@@ -281,7 +291,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         // If the till was renamed or its float changed while that was sending, the
         // other tills have the old details, so the next flush registers again.
         const now = stateRef.current.session;
-        if (now?.tillName === session.tillName && now.float === session.float) memberOk.current = session.eventId;
+        if (now?.tillName === session.tillName && now.float === session.float) markRegistered(session.eventId);
       }
       while (stateRef.current.outbox.length) {
         setSyncStatus('sending');
@@ -302,7 +312,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     } finally {
       flushing.current = false;
     }
-  }, [update, send, register]);
+  }, [update, send, register, markRegistered]);
 
   const enqueue = useCallback(
     (op: OutboxOp) => {
@@ -366,11 +376,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   // Organisers also hear every till's Gift Aid declarations, to make the claim. Nobody
   // else is allowed to read them, so other phones keep only the ones they took.
+  //
+  // The server checks the organiser role when the listener starts, and ends the listener
+  // for good if it says no. So it waits until this run has registered the phone (which
+  // re-claims the role after a restart brings a new sign-in), and starts again after an error.
   const organiser = isOrganiserOf(state.session);
+  const registered = registeredEvent !== null && registeredEvent === state.session?.eventId;
   useEffect(() => {
     const session = stateRef.current.session;
-    if (!loaded || !session || session.mode === 'local' || !organiser) return;
+    if (!loaded || !session || session.mode === 'local' || !organiser || !registered) return;
     let unsub: (() => void) | undefined;
+    let retry: ReturnType<typeof setTimeout> | undefined;
     try {
       unsub = Cloud.watchGiftAid(
         session.eventId,
@@ -381,16 +397,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             for (const d of remote) giftAid[d.saleId] = d;
             return { ...s, giftAid };
           }),
-        // Refused or no signal. The listener is started again when the role or event changes,
-        // and this phone's own declarations are unaffected.
-        () => {},
+        // The listener has ended (refused, or the server gave up). Try again on the next retry
+        // interval, so an organiser never quietly stops hearing other tills' declarations.
+        () => {
+          retry = setTimeout(() => setGiftAidRetry((n) => n + 1), FLUSH_INTERVAL_MS);
+        },
       );
     } catch {
       // Firebase not configured: the sales listener above reports it.
     }
-    return () => unsub?.();
+    return () => {
+      if (retry) clearTimeout(retry);
+      unsub?.();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loaded, sessionKey, organiser]);
+  }, [loaded, sessionKey, organiser, registered, giftAidRetry]);
 
   // ---- actions --------------------------------------------------------------
   const startLocalEvent = useCallback(
@@ -416,7 +437,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const createCloudEvent = useCallback(
     async (name: string, tillName: string, items: Item[] = STARTER_ITEMS) => {
       const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, items);
-      memberOk.current = eventId;
+      markRegistered(eventId);
       update((s) => ({
         ...s,
         session: { eventId, eventName: name, code, tillName, mode: 'cloud', organiserCode, startedAt: Date.now() },
@@ -432,14 +453,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         cardResult: null,
       }));
     },
-    [update],
+    [update, markRegistered],
   );
 
   const joinCloudEvent = useCallback(
     async (code: string, tillName: string) => {
       const ev = await Cloud.joinEvent(code, tillName, stateRef.current.deviceId);
       // A float carried over from an earlier visit is registered again, so the other tills see it against this sign-in.
-      memberOk.current = ev.float ? null : ev.eventId;
+      if (ev.float) memberOk.current = null;
+      else markRegistered(ev.eventId);
       update((s) => ({
         ...s,
         session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), ...(ev.float ? { float: ev.float } : {}) },
@@ -455,7 +477,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         cardResult: null,
       }));
     },
-    [update],
+    [update, markRegistered],
   );
 
   const leaveEvent = useCallback(
@@ -683,6 +705,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const declaration: GiftAidDeclaration = {
         saleId,
         at: Date.now(),
+        donatedAt: sale.at,
         amount,
         firstName: donor.firstName.trim(),
         lastName: donor.lastName.trim(),

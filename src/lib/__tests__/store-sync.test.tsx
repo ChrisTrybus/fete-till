@@ -86,6 +86,7 @@ let onRemoteSales: (sales: Sale[]) => void;
 let onRemoteEvent: (e: { name: string; items: Item[]; closedAt?: number | null }) => void;
 let onRemoteMembers: (members: Member[]) => void;
 let onRemoteGiftAid: ((list: GiftAidDeclaration[]) => void) | undefined;
+let onGiftAidError: ((e: Error) => void) | undefined;
 
 beforeEach(async () => {
   jest.useFakeTimers();
@@ -97,7 +98,8 @@ beforeEach(async () => {
   cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 0 });
   cloud.claimOrganiser.mockResolvedValue(undefined);
   cloud.saleExists.mockResolvedValue(false);
-  cloud.watchGiftAid.mockImplementation((_id, onDeclarations) => {
+  cloud.watchGiftAid.mockImplementation((_id, onDeclarations, onError) => {
+    onGiftAidError = onError;
     onRemoteGiftAid = onDeclarations;
     return () => {};
   });
@@ -973,7 +975,7 @@ describe('Gift Aid', () => {
     await settle();
 
     const declaration = store.giftAid[sale.id];
-    expect(declaration).toMatchObject({ saleId: sale.id, amount: 500, firstName: 'Ada', postcode: 'SW1A 1AA', tillName: 'Cake stall' });
+    expect(declaration).toMatchObject({ saleId: sale.id, amount: 500, firstName: 'Ada', postcode: 'SW1A 1AA', tillName: 'Cake stall', donatedAt: sale.at });
     expect(pushedOps().map(opKey)).toEqual([`sale:${sale.id}`, 'giftAid']);
     expect(cloud.pushOp).toHaveBeenLastCalledWith('ev1', { kind: 'giftAid', declaration });
     expect(store.outbox).toHaveLength(0);
@@ -1009,6 +1011,35 @@ describe('Gift Aid', () => {
     const remote = { saleId: 'other', at: 1, amount: 300, firstName: 'Grace', lastName: 'Hopper', house: '3', postcode: 'M1 1AE', tillName: 'Tombola', deviceId: 'd2' };
     await act(async () => onRemoteGiftAid!([remote]));
     expect(store.giftAid.other).toEqual(remote);
+  });
+
+  test('after a restart the organiser waits until it has registered again before listening', async () => {
+    const firstRun = await launchInCloudEvent();
+    await firstRun.unmount();
+    cloud.watchGiftAid.mockClear();
+
+    goOffline(); // a new sign-in can't re-claim the organiser role yet
+    await launch();
+    await settle(15_000);
+    expect(cloud.watchGiftAid).not.toHaveBeenCalled();
+
+    goOnline();
+    await settle(15_000);
+    expect(cloud.claimOrganiser).toHaveBeenCalled();
+    expect(cloud.watchGiftAid).toHaveBeenCalledTimes(1);
+  });
+
+  test('a listener the server ends is started again, so declarations keep arriving', async () => {
+    await launchInCloudEvent();
+    expect(cloud.watchGiftAid).toHaveBeenCalledTimes(1);
+
+    await act(async () => onGiftAidError!(Object.assign(new Error('denied'), { code: 'permission-denied' })));
+    await settle(15_000);
+    expect(cloud.watchGiftAid).toHaveBeenCalledTimes(2);
+
+    const remote = { saleId: 'late', at: 1, amount: 100, firstName: 'Grace', lastName: 'Hopper', house: '3', postcode: 'M1 1AE', tillName: 'Tombola', deviceId: 'd2' };
+    await act(async () => onRemoteGiftAid!([remote]));
+    expect(store.giftAid.late).toEqual(remote);
   });
 
   test('a phone that joins as a volunteer does not try to read the declarations', async () => {

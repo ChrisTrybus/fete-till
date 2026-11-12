@@ -106,9 +106,10 @@ service cloud.firestore {
         allow create: if isMember(eventId)
           && request.resource.data.saleId == saleId
           && request.resource.data.createdBy == request.auth.uid
-          && request.resource.data.keys().hasOnly(['saleId', 'at', 'amount', 'firstName', 'lastName', 'house', 'postcode', 'tillName', 'deviceId', 'createdBy'])
+          && request.resource.data.keys().hasOnly(['saleId', 'at', 'donatedAt', 'amount', 'firstName', 'lastName', 'house', 'postcode', 'tillName', 'deviceId', 'createdBy'])
           && request.resource.data.amount is int
           && request.resource.data.amount > 0
+          && (!('donatedAt' in request.resource.data) || request.resource.data.donatedAt is int)
           && request.resource.data.firstName is string && request.resource.data.firstName.size() > 0 && request.resource.data.firstName.size() <= 35
           && request.resource.data.lastName is string && request.resource.data.lastName.size() > 0 && request.resource.data.lastName.size() <= 35
           && request.resource.data.house is string && request.resource.data.house.size() > 0 && request.resource.data.house.size() <= 40

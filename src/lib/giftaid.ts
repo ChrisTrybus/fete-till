@@ -88,8 +88,12 @@ const ddmmyy = (ms: number) => {
 export function giftAidCsv(sales: Sale[], declarations: GiftAidDeclaration[]): string {
   const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const rows = [['Title', 'First name or initial', 'Last name', 'House name or number', 'Postcode', 'Aggregated donations', 'Sponsored event', 'Donation date', 'Amount']];
+  const saleAt = new Map(sales.map((s) => [s.id, s.at]));
   for (const d of liveDeclarations(sales, declarations)) {
-    rows.push(['', d.firstName, d.lastName, d.house, d.postcode, '', '', ddmmyy(d.at), (d.amount / 100).toFixed(2)]);
+    // HMRC wants the date the donation was received, not when the declaration was made:
+    // a donor may come back and Gift Aid it later.
+    const donated = saleAt.get(d.saleId) ?? d.donatedAt ?? d.at;
+    rows.push(['', d.firstName, d.lastName, d.house, d.postcode, '', '', ddmmyy(donated), (d.amount / 100).toFixed(2)]);
   }
   return rows.map((r) => r.map(esc).join(',')).join('\n');
 }

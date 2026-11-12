@@ -80,6 +80,16 @@ describe('Gift Aid', () => {
     expect(rows[1]).toBe('"","Ada","Lovelace","12","SW1A 1AA","","","20/06/26","5.00"');
   });
 
+  test('the export gives the date the donation was taken, even when the declaration came later', () => {
+    const nextDay = AT + 24 * 60 * 60 * 1000;
+    // The sale is on this phone: its date is used.
+    expect(giftAidCsv([sale('a')], [declaration('a', { at: nextDay, donatedAt: AT })]).split('\n')[1]).toContain('"20/06/26"');
+    // The sale hasn't arrived yet: the donation date saved with the declaration is used.
+    expect(giftAidCsv([], [declaration('a', { at: nextDay, donatedAt: AT })]).split('\n')[1]).toContain('"20/06/26"');
+    // An older declaration saved without one falls back to when it was made.
+    expect(giftAidCsv([], [declaration('a', { at: nextDay })]).split('\n')[1]).toContain('"21/06/26"');
+  });
+
   test('the end-of-day summary gives the Gift Aid totals but no donor’s details', () => {
     const text = summaryText({ eventName: 'Fete', sales: [sale('a'), sale('b')], giftAid: [declaration('a')] });
     expect(text).toContain('Includes £10.00 in donations. 1 Gift Aid declaration covers £5.00, so £1.25 can be claimed from HMRC.');

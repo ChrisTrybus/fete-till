@@ -370,6 +370,7 @@ describe('Gift Aid declarations', () => {
   const declaration = (saleId: string, createdBy: string, extra: Record<string, unknown> = {}) => ({
     saleId,
     at: 1700000000000,
+    donatedAt: 1699990000000,
     amount: 500,
     firstName: 'Ada',
     lastName: 'Lovelace',
@@ -407,6 +408,7 @@ describe('Gift Aid declarations', () => {
     await assertFails(setDoc(ref(MEMBER, 'd'), declaration('d', MEMBER, { lastName: 'x'.repeat(36) })));
     await assertFails(setDoc(ref(MEMBER, 'e'), declaration('e', MEMBER, { house: '' })));
     await assertFails(setDoc(ref(MEMBER, 'f'), declaration('f', MEMBER, { postcode: 'NOT A POSTCODE' })));
+    await assertFails(setDoc(ref(MEMBER, 'g'), declaration('g', MEMBER, { donatedAt: 'yesterday' })));
   });
 
   test('resending the same declaration is accepted, but changing one is not', async () => {
