@@ -57,7 +57,9 @@ export type Session = {
 export type TillFloat = { tillName: string; float: number };
 
 // A phone that has joined a shared event, as the other tills see it.
-export type Member = { deviceId: string; tillName: string; float: number };
+// `joinedAt` is when it last registered (epoch ms). A phone whose sign-in changed
+// appears more than once; its latest registration is the one that counts.
+export type Member = { deviceId: string; tillName: string; float: number; joinedAt?: number };
 
 // An event this phone has left, as listed under Past events. The totals are
 // saved with it so the list can be shown without loading every sale.

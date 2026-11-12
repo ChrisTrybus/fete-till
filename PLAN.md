@@ -50,7 +50,8 @@ Not yet checked:
 - The new rules pass their tests in the emulator but have not been deployed. Deploy `firestore.rules` before using a build with this change. Floats work under the rules already deployed; the new rule only adds a check that a float is whole pence and not negative.
 - Floats in a shared event have only been run in the automated tests, against a fake server. Floats, categories and the hidden sold-out items were checked in a browser on a this-phone-only event.
 - A float that has not yet reached the other tills is not counted in the Event tab's "waiting to send" figure.
-- If a phone is reinstalled part-way through a shared event and joins again, its earlier float stays on the server under its old sign-in, so the float is counted twice until an organiser notices. Rare, and not fixed.
+- A phone that restarts with a new anonymous sign-in is counted once: floats are taken from each phone’s latest registration. A phone that leaves and rejoins gets its float back. Only a full reinstall, which gives the phone a new identity, can still leave an old float behind to be counted twice.
+- Rejoining reads the member list from the server to find the earlier float. That has only run against the fake server in the automated tests.
 - The organiser screens only appear in a shared event, so they have not been seen running: there is no Firebase project configured on this machine.
 - The PDF has not been made on a device. Closing, the locked till and the summary card were checked in a browser on a this-phone-only event; in a browser "Share as PDF" opens the print dialog instead.
 - Events started before this change have no organiser code, so nobody can edit their price list. Start a new event.

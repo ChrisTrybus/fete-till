@@ -8,6 +8,22 @@ export type TinRow = { tillName: string; float: number; cash: number; inTin: num
 export type CashToCount = { rows: TinRow[]; float: number; inTin: number };
 
 /**
+ * One entry per phone. A phone that restarts can come back with a new anonymous
+ * sign-in, which leaves its earlier member record behind; only its latest
+ * registration counts, so its float isn't added in twice. Records with no device
+ * id (from before floats existed) are kept as they are.
+ */
+export function latestPerDevice(members: Member[]): Member[] {
+  const unknown: Member[] = [];
+  const latest = new Map<string, Member>();
+  for (const m of members) {
+    if (!m.deviceId) unknown.push(m);
+    else if ((m.joinedAt ?? 0) >= (latest.get(m.deviceId)?.joinedAt ?? -1)) latest.set(m.deviceId, m);
+  }
+  return [...unknown, ...latest.values()];
+}
+
+/**
  * Every till's float. In a shared event these come from the phones that have
  * joined; this phone's own figure is taken from the phone itself, so a float
  * entered with no signal counts straight away. Phones sharing a till name are
@@ -17,7 +33,7 @@ export function tillFloats(session: Session | null, deviceId: string, members: M
   if (!session) return [];
   const all: TillFloat[] = [
     { tillName: session.tillName, float: session.float ?? 0 },
-    ...(session.mode === 'cloud' ? members.filter((m) => m.deviceId !== deviceId) : []),
+    ...(session.mode === 'cloud' ? latestPerDevice(members).filter((m) => m.deviceId !== deviceId) : []),
   ];
   const byTill = new Map<string, TillFloat>();
   for (const { tillName, float } of all) {

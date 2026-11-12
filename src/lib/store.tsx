@@ -367,11 +367,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const joinCloudEvent = useCallback(
     async (code: string, tillName: string) => {
-      const ev = await Cloud.joinEvent(code, tillName);
-      memberOk.current = ev.eventId;
+      const ev = await Cloud.joinEvent(code, tillName, stateRef.current.deviceId);
+      // A float carried over from an earlier visit is registered again, so the other tills see it against this sign-in.
+      memberOk.current = ev.float ? null : ev.eventId;
       update((s) => ({
         ...s,
-        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now() },
+        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), ...(ev.float ? { float: ev.float } : {}) },
         items: ev.items,
         sales: {},
         outbox: [],

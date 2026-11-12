@@ -25,6 +25,23 @@ describe('opening floats', () => {
     ]);
   });
 
+  test('a phone whose sign-in changed is counted once, by its latest registration', () => {
+    const floats = tillFloats(session, 'me', [
+      { deviceId: 'a', tillName: 'Tombola', float: 1500, joinedAt: 100 },
+      { deviceId: 'a', tillName: 'Tombola', float: 2500, joinedAt: 300 }, // same phone, new sign-in, float corrected
+      { deviceId: 'me', tillName: 'Cake stall', float: 2000, joinedAt: 100 },
+      { deviceId: 'me', tillName: 'Cake stall', float: 2000, joinedAt: 200 },
+      { deviceId: '', tillName: 'Plants', float: 500 }, // registered before floats carried a device id
+      { deviceId: '', tillName: 'Books', float: 700 },
+    ]);
+    expect(floats).toEqual([
+      { tillName: 'Cake stall', float: 2000 },
+      { tillName: 'Plants', float: 500 },
+      { tillName: 'Books', float: 700 },
+      { tillName: 'Tombola', float: 2500 },
+    ]);
+  });
+
   test('two phones on one till are added together', () => {
     expect(tillFloats(session, 'me', [{ deviceId: 'a', tillName: ' cake stall', float: 1000 }])).toEqual([{ tillName: 'Cake stall', float: 3000 }]);
   });
