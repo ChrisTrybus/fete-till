@@ -59,6 +59,16 @@ Still to do:
 
 The plan: a single till on one phone is free and needs no backend. Shared events with several tills will need a paid event pack, which also unlocks saved price lists. Until purchases exist, shared events stay free.
 
+Decisions so far:
+
+- Pricing is per event, sold as packs: 99p for one event, £2.99 for five. No subscription.
+- Buying any pack unlocks saved price lists on that account for good, not just for that event.
+- Shared events stay free until purchases are live, then need a credit. There are no real users yet, so nobody needs notice of the change.
+- Sales are never blocked part-way through an event. Any limit applies when starting an event, not during one.
+- Free events cost nothing to host: they never touch Firebase.
+- Unused credits and saved lists must survive a reinstall, so they are held against a real sign-in, not the anonymous one. The stores do not restore consumable purchases.
+- Cloud history writes a summary onto the event when it closes, so listing past events reads one document each rather than every sale.
+
 Done (free tier):
 
 - Starting an event defaults to "Just this phone". "Several tills" is the other choice when sync is set up.
