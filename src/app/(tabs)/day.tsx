@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Pressable, ScrollView, Share, Text, View } from 'react-native';
 import { Row, Stat } from '@/components/figures';
 import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
+import { cashToCount } from '@/lib/floats';
 import { formatPence } from '@/lib/money';
 import { sharePdf } from '@/lib/share-pdf';
 import { useStore } from '@/lib/store';
@@ -11,11 +12,13 @@ import { salesToCsv, summarise } from '@/lib/totals';
 /** End-of-day figures for every till in the event. */
 export default function DayTotal() {
   const t = useTheme();
-  const { sales, setVoided, session, parked, isOrganiser, deviceId } = useStore();
+  const { sales, setVoided, session, parked, isOrganiser, deviceId, floats } = useStore();
   // Sales the event refused: counted here, but not on the other tills.
   const notShared = useMemo(() => new Set(parked.flatMap((p) => (p.op.kind === 'sale' ? [p.op.sale.id] : []))), [parked]);
   const list = useMemo(() => Object.values(sales).sort((a, b) => b.at - a.at), [sales]);
   const totals = useMemo(() => summarise(list), [list]);
+  // What each tin should hold: its opening float plus the cash it took.
+  const tins = useMemo(() => cashToCount(totals, floats), [totals, floats]);
   const [confirmVoid, setConfirmVoid] = useState<string | null>(null);
 
   const exportCsv = () =>
@@ -24,7 +27,7 @@ export default function DayTotal() {
   const closedAt = session?.closedAt ?? null;
   const [pdfBusy, setPdfBusy] = useState(false);
   const [pdfError, setPdfError] = useState<string | null>(null);
-  const summary = { eventName: session?.eventName ?? 'Event', sales: list, closedAt, notShared: notShared.size };
+  const summary = { eventName: session?.eventName ?? 'Event', sales: list, closedAt, notShared: notShared.size, floats };
   const shareSummary = () =>
     Share.share({ title: `${summary.eventName}: end-of-day summary`, message: summaryText(summary) }).catch(() => {});
   const sharePdfSummary = async () => {
@@ -43,7 +46,7 @@ export default function DayTotal() {
     <ScrollView contentContainerStyle={{ padding: 16, gap: 16, maxWidth: 820, width: '100%', alignSelf: 'center' }}>
       <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 10 }}>
         <Stat label="Takings" value={formatPence(totals.takings)} hero />
-        <Stat label="Cash in tins" value={formatPence(totals.cash)} />
+        <Stat label="Cash taken" value={formatPence(totals.cash)} />
         <Stat label="Card" value={formatPence(totals.card)} />
         <Stat label="Sales" value={String(totals.count)} />
       </View>
@@ -63,6 +66,28 @@ export default function DayTotal() {
           {pdfError && <Body>{pdfError}</Body>}
         </Card>
       )}
+
+      <Card>
+        <Heading>Cash to count</Heading>
+        {tins.float === 0 ? (
+          <Body muted>
+            The tins should hold {formatPence(tins.inTin)}: the cash taken. If a tin started with a float, set it on the Event tab and
+            it is added in here.
+          </Body>
+        ) : (
+          <>
+            <Body muted>
+              Each tin should hold its opening float plus the cash it took.
+              {session?.mode === 'cloud' ? ' Each till sets its own float on the Event tab.' : ''}
+            </Body>
+            <Row header cells={['Till', 'Float', 'Cash taken', 'In tin']} />
+            {tins.rows.map((r) => (
+              <Row key={r.tillName} cells={[r.tillName, formatPence(r.float), formatPence(r.cash), formatPence(r.inTin)]} />
+            ))}
+            {tins.rows.length > 1 && <Row cells={['All tins', formatPence(tins.float), formatPence(totals.cash), formatPence(tins.inTin)]} />}
+          </>
+        )}
+      </Card>
 
       {notShared.size > 0 && (
         <Card style={{ borderColor: t.danger }}>

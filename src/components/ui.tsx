@@ -13,6 +13,8 @@ const light = {
   sunInk: '#2a2100',
   danger: '#b3362b',
   bunting: ['#e2574c', '#f5c542', '#3d8fd1', '#1f6b45', '#e98ab0'],
+  // Item tile colours, by the names in lib/categories.ts. The first five are the bunting.
+  tiles: { red: '#e2574c', yellow: '#f5c542', blue: '#3d8fd1', green: '#1f6b45', pink: '#e98ab0', purple: '#8a63d2', orange: '#ef8a3c' },
 };
 const dark: typeof light = {
   ...light,

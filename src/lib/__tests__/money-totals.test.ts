@@ -50,6 +50,17 @@ describe('money', () => {
     ]);
     expect(skipped).toEqual(['Raffle', 'Bad, abc']);
   });
+
+  test('a pasted line can end with a category', () => {
+    const { items, skipped } = parsePriceList('Tea, 0.80, Drinks\nSlice of cake\t1.50\tCakes\nRaffle strip, 5, 2.00\nJam, 3');
+    expect(items).toEqual([
+      { name: 'Tea', price: 80, category: 'Drinks' },
+      { name: 'Slice of cake', price: 150, category: 'Cakes' },
+      { name: 'Raffle strip, 5', price: 200 },
+      { name: 'Jam', price: 300 },
+    ]);
+    expect(skipped).toEqual([]);
+  });
 });
 
 describe('day totals', () => {
@@ -72,9 +83,9 @@ describe('day totals', () => {
       { name: 'Tea', qty: 3, value: 240 },
     ]);
     expect(t.byTill).toEqual([
-      { tillName: 'Cake stall', count: 1, value: 310 },
-      { tillName: 'Tombola', count: 1, value: 150 },
-      { tillName: 'Unnamed till', count: 1, value: 80 },
+      { tillName: 'Cake stall', count: 1, value: 310, cash: 310 },
+      { tillName: 'Tombola', count: 1, value: 150, cash: 0 },
+      { tillName: 'Unnamed till', count: 1, value: 80, cash: 80 },
     ]);
   });
 

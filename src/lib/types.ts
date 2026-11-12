@@ -7,6 +7,11 @@ export type Item = {
   // Names of the tills that sell this item. Left out when every till sells it.
   // Matched by till name, so two phones on one stall can share a name and a list.
   tills?: string[];
+  // A heading the item is grouped under on the till, such as "Drinks". Optional.
+  category?: string;
+  // The colour of the item's tile on the till: one of COLOURS in categories.ts.
+  // Items in one category share a colour. Left out to have one picked automatically.
+  colour?: string;
 };
 
 export type SaleLine = {
@@ -44,7 +49,15 @@ export type Session = {
   closedAt?: number | null;
   // When this phone started or joined the event (epoch ms).
   startedAt?: number;
+  // Cash put in this till's tin before the first sale (pence), so the counted cash can be checked.
+  float?: number;
 };
+
+// The opening float of one till (pence).
+export type TillFloat = { tillName: string; float: number };
+
+// A phone that has joined a shared event, as the other tills see it.
+export type Member = { deviceId: string; tillName: string; float: number };
 
 // An event this phone has left, as listed under Past events. The totals are
 // saved with it so the list can be shown without loading every sale.
@@ -60,6 +73,8 @@ export type PastEvent = {
   cash: number; // pence
   card: number; // pence
   count: number; // sales, voided excluded
+  // Each till's opening float, as this phone knew them when it left. Missing on older saves.
+  floats?: TillFloat[];
 };
 
 // Writes waiting to reach Firestore. Processed in order; each is safe to retry.

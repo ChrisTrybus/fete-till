@@ -55,8 +55,12 @@ service cloud.firestore {
 
       match /members/{uid} {
         allow read: if isMember(eventId);
+        // A member doc also carries the till's opening float (whole pence), which
+        // the other tills add to its cash sales to say what its tin should hold.
         allow create, update: if signedIn()
           && request.auth.uid == uid
+          && (!('float' in request.resource.data)
+            || (request.resource.data.float is int && request.resource.data.float >= 0))
           && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.eventId == eventId;
       }
 

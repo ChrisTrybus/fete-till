@@ -2,7 +2,7 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Share, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, Label, useTheme } from '@/components/ui';
-import { formatPence } from '@/lib/money';
+import { formatPence, parsePounds } from '@/lib/money';
 import { useStore } from '@/lib/store';
 import type { OutboxOp } from '@/lib/types';
 
@@ -31,7 +31,7 @@ const advice = (op: OutboxOp) =>
 /** Join code to share, this till's name, sync details, and leaving the event. */
 export default function EventScreen() {
   const t = useTheme();
-  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed } =
+  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setFloat } =
     useStore();
   const [confirmClose, setConfirmClose] = useState(false);
   const [organiserCode, setOrganiserCode] = useState('');
@@ -39,6 +39,10 @@ export default function EventScreen() {
   const [claimError, setClaimError] = useState<string | null>(null);
   const unshared = outbox.length + parked.length;
   const [till, setTill] = useState(session?.tillName ?? '');
+  const savedFloat = session?.float ?? 0;
+  const [float, setFloatText] = useState(savedFloat ? (savedFloat / 100).toFixed(2) : '');
+  // An empty box means no float.
+  const floatPence = float.trim() ? parsePounds(float) : 0;
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
   // Set when the event couldn't be saved to Past events, so leaving would lose its sales.
@@ -143,6 +147,34 @@ export default function EventScreen() {
         <Field value={till} onChangeText={setTill} placeholder="e.g. Cake stall" />
         <Button title="Rename till" disabled={!till.trim() || till.trim() === session.tillName} onPress={() => setTillName(till.trim())} />
         <Body muted>New sales use the new name. Earlier sales keep the name they were taken under.</Body>
+      </Card>
+
+      <Card>
+        <Label>Opening float</Label>
+        <Body muted>
+          The cash in this till’s tin before the first sale. Day total adds it to the cash taken, so you know what the tin should hold
+          when you count it. It isn’t counted as takings.
+        </Body>
+        <Field
+          value={float}
+          onChangeText={setFloatText}
+          placeholder="e.g. 20.00"
+          keyboardType="decimal-pad"
+          accessibilityLabel="Opening float in pounds"
+          style={{ borderColor: floatPence === null ? t.danger : t.line }}
+        />
+        <Button
+          title={savedFloat ? 'Change float' : 'Set float'}
+          disabled={floatPence === null || floatPence === savedFloat}
+          onPress={() => setFloat(floatPence ?? 0)}
+        />
+        {floatPence === null ? (
+          <Body muted>Type an amount like 20 or 20.00.</Body>
+        ) : savedFloat ? (
+          <Body muted>
+            This till’s float is {formatPence(savedFloat)}.{session.mode === 'cloud' ? ' The other tills see it once this phone has signal.' : ''}
+          </Body>
+        ) : null}
       </Card>
 
       {session.closedAt ? (

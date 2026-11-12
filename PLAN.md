@@ -41,19 +41,22 @@ Done:
 - Organiser role. Only an organiser can edit the price list or void another till's sales; a till can still void its own. Starting an event makes an 8-character organiser code, shown on that phone's Event tab. Entering it on the Event tab of another phone (or after a reinstall) makes that phone an organiser too, so no accounts are needed. The code is checked by the security rules and can't be read back by any device. A this-phone-only event has no restrictions.
 - Close the event. An organiser closes it on the Event tab (and can reopen it). Every till then shows "This event is closed" instead of the till, and Day total gains an end-of-day summary that can be shared as text or as a PDF (`expo-print`, `expo-sharing`). Closing works with no signal and sends when it can. The server still accepts sales after closing, on purpose: a till with no signal doesn't hear about the close, and what it took must still count. The summary says how many sales were taken after closing.
 
+- Float tracking. Each till enters its opening float on the Event tab. Day total has a "Cash to count" card: each till's float, the cash it took, and what its tin should hold. The float is never counted as takings. The end-of-day summary (text and PDF) and Past events carry the same figures. In a shared event the float travels on the till's member record, so it needs no new kind of queued change; it is set with no signal and sent on the next retry.
+- Item categories and colours. On the Price list tab, "Set categories and colours" gives each item a category and a tile colour. The till groups items under their category, in the order the categories first appear in the list, with uncategorised items last. Items in a category share a colour; choosing a colour for one changes the rest. With nothing chosen, colours are picked automatically. A pasted list can carry a category as a third column ("Tea, 0.80, Drinks").
+- Sold-out items are hidden on the till. Holding a tile still marks it out of stock; it then moves behind an "N out of stock · Show" row below the items, where holding it brings it back.
+
 Not yet checked:
 
-- The new rules and rules tests have not been run (they need the emulator, see Phase 1). Deploy `firestore.rules` before using a build with this change.
+- The new rules and rules tests have not been run (they need the emulator, see Phase 1). Deploy `firestore.rules` before using a build with this change. Floats work under the rules already deployed; the new rule only adds a check that a float is whole pence and not negative.
+- Floats in a shared event have only been run in the automated tests, against a fake server. Floats, categories and the hidden sold-out items were checked in a browser on a this-phone-only event.
+- A float that has not yet reached the other tills is not counted in the Event tab's "waiting to send" figure.
+- If a phone is reinstalled part-way through a shared event and joins again, its earlier float stays on the server under its old sign-in, so the float is counted twice until an organiser notices. Rare, and not fixed.
 - The organiser screens only appear in a shared event, so they have not been seen running: there is no Firebase project configured on this machine.
 - The PDF has not been made on a device. Closing, the locked till and the summary card were checked in a browser on a this-phone-only event; in a browser "Share as PDF" opens the print dialog instead.
 - Events started before this change have no organiser code, so nobody can edit their price list. Start a new event.
 - If a phone loses its anonymous sign-in (reinstall, cleared data), it can no longer void the sales it took earlier. An organiser can.
 
-Still to do:
-
-3. Float tracking: record each till's opening float so "cash in tin" matches the counted cash.
-4. Item categories and colours; hide items that have sold out.
-5. ~~Reuse last year's price list when starting a new event.~~ Done in the free tier work below.
+Nothing is left to build in this phase. Reusing last year's price list was done in the free tier work below.
 
 ## Free tier (this phone only) and paid event packs
 

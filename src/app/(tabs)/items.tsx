@@ -2,15 +2,16 @@ import { randomUUID } from 'expo-crypto';
 import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, s, useTheme } from '@/components/ui';
+import { categoriesOf, categoryKey, COLOURS, tileColours, type Colour } from '@/lib/categories';
 import { formatPence, parsePounds, parsePriceList } from '@/lib/money';
 import { MAX_ITEMS, useStore } from '@/lib/store';
 import { tillKey, toggleTill, uniqueTills } from '@/lib/tills';
 import type { Item } from '@/lib/types';
 
-type Draft = { id: string; name: string; price: string; tills?: string[] };
+type Draft = { id: string; name: string; price: string; tills?: string[]; category?: string; colour?: string };
 
 const toDraft = (items: Item[]): Draft[] =>
-  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2), tills: i.tills }));
+  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2), tills: i.tills, category: i.category, colour: i.colour }));
 
 /** Edit the shared price list. Changes are saved together so every till updates at once. */
 export default function PriceList() {
@@ -32,6 +33,28 @@ export default function PriceList() {
   // With a single till there is nothing to choose, so the list stays as plain as ever.
   const manyTills = knownTills.length > 1;
   const [choosingTills, setChoosingTills] = useState(false);
+  // Categories group the items on the till, and each has a tile colour.
+  const [grouping, setGrouping] = useState(false);
+  const categories = categoriesOf(draft);
+  const colours = tileColours(draft);
+
+  /** Puts an item in a category. It takes on the colour the category already has. */
+  const setCategory = (id: string, name: string | undefined) => {
+    setMessage(null);
+    setDraft((d) => {
+      const key = categoryKey(name);
+      const peer = key ? d.find((x) => x.id !== id && categoryKey(x.category) === key) : undefined;
+      return d.map((x) => (x.id === id ? { ...x, category: name || undefined, colour: peer ? peer.colour : x.colour } : x));
+    });
+  };
+  /** Sets an item's tile colour, and with it the rest of its category. Undefined goes back to automatic. */
+  const setColour = (id: string, colour: Colour | undefined) => {
+    setMessage(null);
+    setDraft((d) => {
+      const key = categoryKey(d.find((x) => x.id === id)?.category);
+      return d.map((x) => (x.id === id || (key && categoryKey(x.category) === key) ? { ...x, colour } : x));
+    });
+  };
 
   const edit = (id: string, patch: Partial<Draft>) => {
     setMessage(null);
@@ -41,7 +64,18 @@ export default function PriceList() {
   const tooMany = session?.mode === 'cloud' && draft.length > MAX_ITEMS;
 
   const save = () => {
-    setItems(draft.map((d) => ({ id: d.id, name: d.name.trim(), price: parsePounds(d.price)!, ...(d.tills?.length ? { tills: d.tills } : {}) })));
+    // One spelling per category, so "Drinks" and "drinks" are saved as the same name.
+    const spelling = (name: string | undefined) => categories.find((c) => categoryKey(c) === categoryKey(name));
+    setItems(
+      draft.map((d) => ({
+        id: d.id,
+        name: d.name.trim(),
+        price: parsePounds(d.price)!,
+        ...(d.tills?.length ? { tills: d.tills } : {}),
+        ...(spelling(d.category) ? { category: spelling(d.category) } : {}),
+        ...(d.colour ? { colour: d.colour } : {}),
+      })),
+    );
     setEdited(null);
     setMessage(session?.mode === 'cloud' ? 'Price list saved. Other tills will update when they have signal.' : 'Price list saved.');
   };
@@ -52,7 +86,7 @@ export default function PriceList() {
       setMessage('No lines matched. Use one item per line, like "Tea, 0.80".');
       return;
     }
-    setEdited(parsed.map((p) => ({ id: randomUUID(), name: p.name, price: (p.price / 100).toFixed(2) })));
+    setEdited(parsed.map((p) => ({ id: randomUUID(), name: p.name, price: (p.price / 100).toFixed(2), category: p.category })));
     setPaste('');
     setMessage(
       `${parsed.length} items loaded. Check them, then tap Save.` + (skipped.length ? ` Skipped: ${skipped.join('; ')}` : ''),
@@ -80,7 +114,11 @@ export default function PriceList() {
             <View key={i.id} style={{ flexDirection: 'row', gap: 8, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: t.line }}>
               <View style={{ flex: 1 }}>
                 <Text style={{ color: t.ink, fontSize: 16 }}>{i.name}</Text>
-                {i.tills?.length ? <Text style={{ color: t.muted, fontSize: 13 }}>Only on {i.tills.join(', ')}</Text> : null}
+                {i.category || i.tills?.length ? (
+                  <Text style={{ color: t.muted, fontSize: 13 }}>
+                    {[i.category, i.tills?.length ? `Only on ${i.tills.join(', ')}` : ''].filter(Boolean).join(' · ')}
+                  </Text>
+                ) : null}
               </View>
               <Text style={[s.num, { color: t.ink, fontSize: 16 }]}>{formatPence(i.price)}</Text>
             </View>
@@ -114,6 +152,12 @@ export default function PriceList() {
             <>
               <Body muted>Every till sells every item unless you choose otherwise.</Body>
               <Button title={choosingTills ? 'Done choosing tills' : 'Choose which tills sell what'} onPress={() => setChoosingTills((v) => !v)} />
+            </>
+          )}
+          {draft.length > 0 && (
+            <>
+              <Body muted>Categories such as Drinks or Cakes group the items on the till, each in its own colour.</Body>
+              <Button title={grouping ? 'Done with categories' : 'Set categories and colours'} onPress={() => setGrouping((v) => !v)} />
             </>
           )}
           {draft.map((d) => {
@@ -156,6 +200,52 @@ export default function PriceList() {
               ) : d.tills?.length ? (
                 <Text style={{ color: t.muted, fontSize: 13, paddingBottom: 6 }}>Only on {d.tills.join(', ')}</Text>
               ) : null}
+              {grouping ? (
+                <View style={{ gap: 8, paddingBottom: 10 }}>
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+                    <Chip title="No category" label={`${d.name}: no category`} selected={!categoryKey(d.category)} onPress={() => setCategory(d.id, undefined)} />
+                    {categories.map((c) => (
+                      <Chip
+                        key={categoryKey(c)}
+                        title={c}
+                        label={`${d.name}: in ${c}`}
+                        selected={categoryKey(d.category) === categoryKey(c)}
+                        onPress={() => setCategory(d.id, c)}
+                      />
+                    ))}
+                  </View>
+                  <Field
+                    value={d.category ?? ''}
+                    onChangeText={(v) => setCategory(d.id, v)}
+                    placeholder="New category, e.g. Drinks"
+                    accessibilityLabel={`Category of ${d.name}`}
+                  />
+                  <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                    <Chip title="Auto colour" label={`${d.name}: colour chosen automatically`} selected={!d.colour} onPress={() => setColour(d.id, undefined)} />
+                    {COLOURS.map((c) => {
+                      const on = d.colour === c;
+                      return (
+                        <Pressable
+                          key={c}
+                          onPress={() => setColour(d.id, c)}
+                          accessibilityRole="radio"
+                          accessibilityState={{ selected: on }}
+                          accessibilityLabel={`${d.name}: ${c}`}
+                          hitSlop={4}
+                          style={{ width: 36, height: 36, borderRadius: 18, borderWidth: 2, borderColor: on ? t.ink : 'transparent', alignItems: 'center', justifyContent: 'center' }}
+                        >
+                          <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: t.tiles[c] }} />
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                </View>
+              ) : (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingBottom: 6 }}>
+                  <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: t.tiles[colours.get(d.id) ?? 'red'] }} />
+                  <Text style={{ color: t.muted, fontSize: 13 }}>{d.category?.trim() || 'No category'}</Text>
+                </View>
+              )}
               </View>
             );
           })}

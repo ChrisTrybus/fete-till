@@ -3,6 +3,7 @@ import { useFocusEffect } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import { Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
+import { groupByCategory, tileColours } from '@/lib/categories';
 import { saleFeedback, tapFeedback } from '@/lib/haptics';
 import { CASH_BUTTONS, cashLabel, formatPence } from '@/lib/money';
 import { useStore } from '@/lib/store';
@@ -14,11 +15,15 @@ const KEEP_AWAKE_TAG = 'till';
 export default function Till() {
   const t = useTheme();
   const { items, recordSale, session, isOrganiser, outOfStock, setOutOfStock } = useStore();
-  // What this till sells, with anything it has run out of moved to the end.
+  // What this till sells. Anything it has run out of is tucked away below the rest.
   const tillName = session?.tillName ?? '';
   const mine = useMemo(() => items.filter((i) => soldOnTill(i, tillName)), [items, tillName]);
   const inStock = useMemo(() => mine.filter((i) => !outOfStock.includes(i.id)), [mine, outOfStock]);
   const soldOut = mine.filter((i) => outOfStock.includes(i.id));
+  const [showSoldOut, setShowSoldOut] = useState(false);
+  // Worked out over everything this till sells, so a tile keeps its colour when stock changes.
+  const colours = useMemo(() => tileColours(mine), [mine]);
+  const groups = useMemo(() => groupByCategory(inStock), [inStock]);
   const closed = Boolean(session?.closedAt);
   const { width, height } = useWindowDimensions();
   const wide = width >= 760; // tablets: items left, sale panel right
@@ -76,7 +81,7 @@ export default function Till() {
     saleFeedback();
     setOutOfStock(it.id, out);
     if (out) setCart(({ [it.id]: _gone, ...rest }) => rest);
-    setLastMessage(out ? `${it.name} is out of stock. Hold it to bring it back.` : `${it.name} is back in stock.`);
+    setLastMessage(out ? `${it.name} is out of stock, so it’s hidden.` : `${it.name} is back in stock.`);
   };
   const complete = (method: 'cash' | 'card') => {
     recordSale(lines, method, tendered);
@@ -85,18 +90,9 @@ export default function Till() {
     clear();
   };
 
-  const grid = (
-    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: compact ? 8 : 10 }}>
-      {items.length === 0 && <Body muted>No items yet. Add some on the Price list tab.</Body>}
-      {items.length > 0 && mine.length === 0 && (
-        <Body muted>
-          No items are set for this till. {isOrganiser ? 'Choose them on the Price list tab.' : 'The organiser can choose them on the Price list tab.'}
-        </Body>
-      )}
-      {[...inStock, ...soldOut].map((it) => {
+  const tile = (it: Item) => {
         const out = outOfStock.includes(it.id);
         const qty = out ? 0 : (cart[it.id] ?? 0);
-        const i = mine.indexOf(it); // keeps each item's colour when stock changes
         return (
           // The tile is a plain View holding two sibling buttons (add, and one less),
           // so screen readers see both rather than one nested inside the other.
@@ -111,7 +107,7 @@ export default function Till() {
               borderColor: t.line,
               backgroundColor: t.surface,
               borderTopWidth: 5,
-              borderTopColor: out ? t.line : t.bunting[i % t.bunting.length],
+              borderTopColor: out ? t.line : t.tiles[colours.get(it.id) ?? 'red'],
               opacity: out ? 0.55 : 1,
               overflow: 'hidden',
             }}
@@ -171,7 +167,44 @@ export default function Till() {
             )}
           </View>
         );
-      })}
+  };
+
+  const tiles = { flexDirection: 'row', flexWrap: 'wrap', gap: compact ? 8 : 10 } as const;
+  const grid = (
+    <View style={{ gap: compact ? 10 : 14 }}>
+      {items.length === 0 && <Body muted>No items yet. Add some on the Price list tab.</Body>}
+      {items.length > 0 && mine.length === 0 && (
+        <Body muted>
+          No items are set for this till. {isOrganiser ? 'Choose them on the Price list tab.' : 'The organiser can choose them on the Price list tab.'}
+        </Body>
+      )}
+      {groups.map((g) => (
+        <View key={g.category} style={{ gap: 6 }}>
+          {g.category ? <Label>{g.category}</Label> : null}
+          <View style={tiles}>{g.items.map(tile)}</View>
+        </View>
+      ))}
+      {/* Sold-out items are hidden so they can't be tapped by mistake, with a way to bring them back. */}
+      {soldOut.length > 0 && (
+        <View style={{ gap: 6 }}>
+          <Pressable
+            onPress={() => setShowSoldOut((v) => !v)}
+            accessibilityRole="button"
+            accessibilityState={{ expanded: showSoldOut }}
+            hitSlop={8}
+            style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: 12, paddingVertical: 6 }}
+          >
+            <Text style={{ color: t.muted, fontSize: 14, fontWeight: '700' }}>{soldOut.length} out of stock</Text>
+            <Text style={{ color: t.ink, fontSize: 14, fontWeight: '700' }}>{showSoldOut ? 'Hide' : 'Show'}</Text>
+          </Pressable>
+          {showSoldOut && (
+            <>
+              <Body muted>Hold an item to bring it back into stock.</Body>
+              <View style={tiles}>{soldOut.map(tile)}</View>
+            </>
+          )}
+        </View>
+      )}
     </View>
   );
 

@@ -225,6 +225,18 @@ describe('members', () => {
     );
   });
 
+  test('a member can set its own float, as whole pence that is not negative', async () => {
+    const member = doc(as(MEMBER), 'events', EVENT, 'members', MEMBER);
+    const base = { code: CODE, tillName: 'Plants', joinedAt: 3, deviceId: 'device-1' };
+    await assertSucceeds(setDoc(member, { ...base, float: 2000 }));
+    await assertSucceeds(setDoc(member, { ...base, float: 0 }));
+    await assertFails(setDoc(member, { ...base, float: -500 }));
+    await assertFails(setDoc(member, { ...base, float: 12.5 }));
+    await assertFails(setDoc(member, { ...base, float: '2000' }));
+    // Nobody can set another till's float.
+    await assertFails(setDoc(doc(as(ORGANISER), 'events', EVENT, 'members', MEMBER), { ...base, float: 2000 }));
+  });
+
   test('only members can see the member list', async () => {
     await assertSucceeds(getDocs(collection(as(MEMBER), 'events', EVENT, 'members')));
     await assertFails(getDocs(collection(as(STRANGER), 'events', EVENT, 'members')));

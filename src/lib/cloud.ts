@@ -1,7 +1,7 @@
 // Firestore layout (see firestore.rules for who can do what):
 //   codes/{CODE}                      { eventId }            join code -> event lookup
 //   events/{eventId}                  { name, code, createdBy, createdAt, items[], closedAt? }
-//   events/{eventId}/members/{uid}    { code, tillName, joinedAt }
+//   events/{eventId}/members/{uid}    { code, tillName, joinedAt, deviceId?, float? }
 //   events/{eventId}/private/organiser { code }             organiser code; no device can read it
 //   events/{eventId}/organisers/{uid} { code, claimedAt }   devices that have proved they know it
 //   events/{eventId}/sales/{saleId}   Sale + { createdBy }
@@ -16,7 +16,7 @@ import {
   type Unsubscribe,
 } from 'firebase/firestore';
 import { ensureSignedIn, getCloud } from './firebase';
-import type { Item, OutboxOp, Sale } from './types';
+import type { Item, Member, OutboxOp, Sale } from './types';
 
 // No 0/O, 1/I/L so codes are easy to read aloud and type.
 const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -93,11 +93,15 @@ export async function joinEvent(rawCode: string, tillName: string) {
   return { eventId, code, eventName: (data.name as string) ?? 'Event', items: (data.items as Item[]) ?? [] };
 }
 
-/** (Re)registers this device's anonymous user as a member. Safe to call on every launch. */
-export async function joinAsMember(eventId: string, code: string, tillName: string) {
+/**
+ * (Re)registers this device's anonymous user as a member. Safe to call on every launch.
+ * `till` carries what the other tills should know about this one: its opening float,
+ * and the device id that tells this phone's own entry apart from the rest.
+ */
+export async function joinAsMember(eventId: string, code: string, tillName: string, till?: { deviceId: string; float: number }) {
   const uid = await ensureSignedIn();
   await withTimeout(
-    setDoc(doc(db(), 'events', eventId, 'members', uid), { code, tillName, joinedAt: Date.now() }),
+    setDoc(doc(db(), 'events', eventId, 'members', uid), { code, tillName, joinedAt: Date.now(), ...till }),
   );
 }
 
@@ -135,8 +139,8 @@ export function watchEvent(
   onEvent: (e: { name: string; items: Item[]; closedAt: number | null }) => void,
   onSales: (sales: Sale[]) => void,
   onError: (e: Error) => void,
-  /** Called with the name of every till that has joined the event. */
-  onTills?: (tillNames: string[]) => void,
+  /** Called with every phone that has joined the event: its till name and opening float. */
+  onMembers?: (members: Member[]) => void,
 ): Unsubscribe {
   const event = doc(db(), 'events', eventId);
   const u1 = onSnapshot(
@@ -152,10 +156,17 @@ export function watchEvent(
     (s) => onSales(s.docs.map((d) => d.data() as Sale)),
     onError,
   );
-  const u3 = onTills
+  const u3 = onMembers
     ? onSnapshot(
         collection(event, 'members'),
-        (s) => onTills(s.docs.map((d) => String(d.data().tillName ?? ''))),
+        (s) =>
+          onMembers(
+            s.docs.map((d) => {
+              const m = d.data();
+              const float = Number(m.float);
+              return { deviceId: String(m.deviceId ?? ''), tillName: String(m.tillName ?? ''), float: float > 0 ? float : 0 };
+            }),
+          ),
         onError,
       )
     : undefined;

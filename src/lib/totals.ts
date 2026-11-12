@@ -6,22 +6,23 @@ export type DayTotals = {
   card: number;
   count: number;
   byItem: { name: string; qty: number; value: number }[];
-  byTill: { tillName: string; count: number; value: number }[];
+  byTill: { tillName: string; count: number; value: number; cash: number }[];
 };
 
 /** End-of-day figures across every till in the event. Voided sales are excluded. */
 export function summarise(sales: Sale[]): DayTotals {
   const live = sales.filter((s) => !s.voided);
   const items = new Map<string, { qty: number; value: number }>();
-  const tills = new Map<string, { count: number; value: number }>();
+  const tills = new Map<string, { count: number; value: number; cash: number }>();
   let cash = 0;
   let card = 0;
   for (const s of live) {
     if (s.method === 'cash') cash += s.total;
     else card += s.total;
-    const till = tills.get(s.tillName || 'Unnamed till') ?? { count: 0, value: 0 };
+    const till = tills.get(s.tillName || 'Unnamed till') ?? { count: 0, value: 0, cash: 0 };
     till.count += 1;
     till.value += s.total;
+    if (s.method === 'cash') till.cash += s.total;
     tills.set(s.tillName || 'Unnamed till', till);
     for (const l of s.lines) {
       const it = items.get(l.name) ?? { qty: 0, value: 0 };
