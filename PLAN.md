@@ -14,7 +14,7 @@
 Done:
 
 - Sync tests (`npm test`): a whole sale session with no signal then reconnecting, signal dropping part-way through a send, and the app being killed with unsent sales. These run the real store against a fake Firestore, so they cover the outbox and device storage, not the network itself.
-- Rules tests written (`npm run test:rules`): non-members can't read an event, a sale can't be edited or deleted, codes can't be listed, plus joining, voiding and price-list edits.
+- Rules tests (`npm run test:rules`): non-members can't read an event, a sale can't be edited or deleted, codes can't be listed, plus joining, voiding and price-list edits. They need the Firestore emulator, which needs Java (JDK 21 or later). All 41 pass, including the organiser, closing and float rules from Phase 2.
 - Haptic feedback on item taps and sale completion (`expo-haptics`).
 - Screen stays awake while the Till tab is showing (`expo-keep-awake`).
 - App icon, Android adaptive icon and splash screen (`npm run icons` redraws them).
@@ -29,7 +29,7 @@ Fixed along the way:
 
 Still to do:
 
-1. Run the rules tests. They need the Firestore emulator, which needs Java (JDK 21 or later). They have not been run yet.
+1. ~~Run the rules tests.~~ Done.
 2. Run on real iOS and Android devices. The browser check doesn't cover safe areas, the keyboard, large system font sizes, haptics or keep-awake.
 3. On two real phones: aeroplane mode for a sale session then reconnect, and force-quit with unsent sales. The automated tests cover the app's logic; this checks Firestore and the OS.
 4. Store screenshots (take these from the device run).
@@ -47,7 +47,7 @@ Done:
 
 Not yet checked:
 
-- The new rules and rules tests have not been run (they need the emulator, see Phase 1). Deploy `firestore.rules` before using a build with this change. Floats work under the rules already deployed; the new rule only adds a check that a float is whole pence and not negative.
+- The new rules pass their tests in the emulator but have not been deployed. Deploy `firestore.rules` before using a build with this change. Floats work under the rules already deployed; the new rule only adds a check that a float is whole pence and not negative.
 - Floats in a shared event have only been run in the automated tests, against a fake server. Floats, categories and the hidden sold-out items were checked in a browser on a this-phone-only event.
 - A float that has not yet reached the other tills is not counted in the Event tab's "waiting to send" figure.
 - If a phone is reinstalled part-way through a shared event and joins again, its earlier float stays on the server under its old sign-in, so the float is counted twice until an organiser notices. Rare, and not fixed.
