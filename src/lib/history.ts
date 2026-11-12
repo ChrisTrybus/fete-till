@@ -50,13 +50,39 @@ export function describeEvent(session: Session, sales: Sale[], endedAt: number):
 export const listPastEvents = (): Promise<PastEvent[]> =>
   inTurn(async () => (await readIndex()).sort((a, b) => b.startedAt - a.startedAt));
 
-/** Adds an event to the history, replacing any earlier copy of the same event. */
-export const savePastEvent = (event: PastEvent, sales: Sale[]): Promise<void> =>
+async function readSales(id: string): Promise<Sale[]> {
+  const raw = await historyStorage.getItem(salesKey(id));
+  try {
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return []; // unreadable sales: the event still shows, with the totals saved in the list
+  }
+}
+
+/**
+ * Adds an event to the history when this phone leaves it.
+ *
+ * A phone can leave an event, join it again and leave a second time. The second
+ * time it may hold fewer sales than the first: a sale that never reached the
+ * other tills exists only in the copy saved here. So sales already saved for the
+ * event are kept, and the phone's current copy of a sale wins where both have it.
+ */
+export const savePastEvent = (session: Session, sales: Sale[], endedAt: number): Promise<void> =>
   inTurn(async () => {
+    const index = await readIndex();
+    const earlier = index.find((e) => e.id === session.eventId);
+    const merged = new Map<string, Sale>();
+    if (earlier) for (const sale of await readSales(session.eventId)) merged.set(sale.id, sale);
+    for (const sale of sales) merged.set(sale.id, sale);
+    const all = [...merged.values()];
+
+    const event = describeEvent(session, all, endedAt);
+    if (earlier) event.startedAt = Math.min(earlier.startedAt, event.startedAt);
+
     // Sales first: an event is only listed once its sales are safely stored.
-    await historyStorage.setItem(salesKey(event.id), JSON.stringify(sales));
-    const rest = (await readIndex()).filter((e) => e.id !== event.id);
-    await historyStorage.setItem(INDEX_KEY, JSON.stringify([event, ...rest]));
+    await historyStorage.setItem(salesKey(event.id), JSON.stringify(all));
+    await historyStorage.setItem(INDEX_KEY, JSON.stringify([event, ...index.filter((e) => e.id !== event.id)]));
   });
 
 /** One past event with its sales, or null if it isn't in the history. */
@@ -64,15 +90,7 @@ export const loadPastEvent = (id: string): Promise<{ event: PastEvent; sales: Sa
   inTurn(async () => {
     const event = (await readIndex()).find((e) => e.id === id);
     if (!event) return null;
-    const raw = await historyStorage.getItem(salesKey(id));
-    let sales: Sale[] = [];
-    try {
-      const parsed = raw ? JSON.parse(raw) : [];
-      if (Array.isArray(parsed)) sales = parsed;
-    } catch {
-      // Unreadable sales: the event still shows, with the totals saved in the list.
-    }
-    return { event, sales };
+    return { event, sales: await readSales(id) };
   });
 
 export const deletePastEvent = (id: string): Promise<void> =>

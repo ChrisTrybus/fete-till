@@ -9,7 +9,7 @@ import { randomUUID } from 'expo-crypto';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as Cloud from './cloud';
 import { cloudEnabled } from './firebase';
-import { describeEvent, savePastEvent } from './history';
+import { savePastEvent } from './history';
 import type { Item, OutboxOp, ParkedOp, PaymentMethod, Sale, SaleLine, Session } from './types';
 
 const STORAGE_KEY = 'fetetill:v1';
@@ -373,7 +373,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       if (!session) return;
       const list = Object.values(sales);
       // An event with no sales has nothing worth keeping.
-      if (list.length && !opts?.skipHistory) await savePastEvent(describeEvent(session, list, Date.now()), list);
+      if (list.length && !opts?.skipHistory) await savePastEvent(session, list, Date.now());
       update((s) =>
         s.session?.eventId !== session.eventId
           ? s

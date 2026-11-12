@@ -58,7 +58,13 @@ export default function PastEventScreen() {
   const figures = list.length ? totals : event;
 
   // The event is over for this phone, so the summary treats the time it left as the close.
-  const summary = { eventName: event.name, sales: list, closedAt: event.closedAt ?? event.endedAt };
+  // Without the sales, the summary carries the saved totals rather than working out zeros.
+  const summary = {
+    eventName: event.name,
+    sales: list,
+    closedAt: event.closedAt ?? event.endedAt,
+    savedTotals: list.length ? undefined : { takings: event.takings, cash: event.cash, card: event.card, count: event.count },
+  };
   const shareSummary = () => Share.share({ title: `${event.name}: end-of-day summary`, message: summaryText(summary) }).catch(() => {});
   const exportCsv = () => Share.share({ title: `${event.name} sales`, message: salesToCsv(list) }).catch(() => {});
   const sharePdfSummary = async () => {
