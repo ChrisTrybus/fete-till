@@ -9,6 +9,7 @@ import { randomUUID } from 'expo-crypto';
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as Cloud from './cloud';
 import { cloudEnabled } from './firebase';
+import { describeEvent, savePastEvent } from './history';
 import type { Item, OutboxOp, ParkedOp, PaymentMethod, Sale, SaleLine, Session } from './types';
 
 const STORAGE_KEY = 'fetetill:v1';
@@ -29,6 +30,8 @@ type Persisted = {
   // Ids of items this till has run out of. Kept on this phone only: each stall
   // knows its own stock, and it must work with no signal.
   outOfStock: string[];
+  // The price list from the last event this phone ran, offered when starting the next one.
+  lastItems: Item[] | null;
 };
 
 export type SyncStatus = 'local' | 'synced' | 'sending' | 'waiting' | 'attention';
@@ -40,10 +43,16 @@ type Store = Persisted & {
   isOrganiser: boolean;
   syncStatus: SyncStatus;
   syncError: string | null;
-  startLocalEvent: (name: string, tillName: string) => void;
-  createCloudEvent: (name: string, tillName: string) => Promise<void>;
+  /** Starts an event kept on this phone only. Uses the starter price list unless one is given. */
+  startLocalEvent: (name: string, tillName: string, items?: Item[]) => void;
+  /** Starts an event other tills can join. Uses the starter price list unless one is given. */
+  createCloudEvent: (name: string, tillName: string, items?: Item[]) => Promise<void>;
   joinCloudEvent: (code: string, tillName: string) => Promise<void>;
-  leaveEvent: () => void;
+  /**
+   * Leaves the event. Its sales are first saved under Past events; if that fails this rejects and
+   * the event stays. Pass `skipHistory` to leave anyway.
+   */
+  leaveEvent: (opts?: { skipHistory?: boolean }) => Promise<void>;
   /** Takes on the organiser role with the event's organiser code. Rejects if the code is wrong or there is no signal. */
   claimOrganiser: (code: string) => Promise<void>;
   setTillName: (name: string) => void;
@@ -121,7 +130,7 @@ export function useStore() {
 }
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
-  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], outOfStock: [] });
+  const [state, setState] = useState<Persisted>({ deviceId: '', session: null, items: [], sales: {}, outbox: [], parked: [], shared: null, tills: [], outOfStock: [], lastItems: null });
   const [loaded, setLoaded] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatus>('local');
   const [syncError, setSyncError] = useState<string | null>(null);
@@ -154,6 +163,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         shared: saved.shared ?? null,
         tills: saved.tills ?? [],
         outOfStock: saved.outOfStock ?? [],
+        lastItems: saved.lastItems ?? null,
       };
       stateRef.current = initial;
       setState(initial);
@@ -306,11 +316,12 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   // ---- actions --------------------------------------------------------------
   const startLocalEvent = useCallback(
-    (name: string, tillName: string) =>
+    (name: string, tillName: string, items: Item[] = STARTER_ITEMS) =>
       update((s) => ({
         ...s,
-        session: { eventId: randomUUID(), eventName: name, code: '', tillName, mode: 'local' },
-        items: STARTER_ITEMS,
+        session: { eventId: randomUUID(), eventName: name, code: '', tillName, mode: 'local', startedAt: Date.now() },
+        // There is only one till, so every item is sold on it whatever till it was on before.
+        items: items.map(({ tills: _tills, ...item }) => item),
         sales: {},
         outbox: [],
         parked: [],
@@ -321,13 +332,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const createCloudEvent = useCallback(
-    async (name: string, tillName: string) => {
-      const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, STARTER_ITEMS);
+    async (name: string, tillName: string, items: Item[] = STARTER_ITEMS) => {
+      const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, items);
       memberOk.current = eventId;
       update((s) => ({
         ...s,
-        session: { eventId, eventName: name, code, tillName, mode: 'cloud', organiserCode },
-        items: STARTER_ITEMS,
+        session: { eventId, eventName: name, code, tillName, mode: 'cloud', organiserCode, startedAt: Date.now() },
+        items,
         sales: {},
         outbox: [],
         parked: [],
@@ -344,7 +355,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       memberOk.current = ev.eventId;
       update((s) => ({
         ...s,
-        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud' },
+        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now() },
         items: ev.items,
         sales: {},
         outbox: [],
@@ -357,7 +368,29 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const leaveEvent = useCallback(
-    () => update((s) => ({ ...s, session: null, items: [], sales: {}, outbox: [], parked: [], tills: [], outOfStock: [] })),
+    async (opts?: { skipHistory?: boolean }) => {
+      const { session, sales } = stateRef.current;
+      if (!session) return;
+      const list = Object.values(sales);
+      // An event with no sales has nothing worth keeping.
+      if (list.length && !opts?.skipHistory) await savePastEvent(describeEvent(session, list, Date.now()), list);
+      update((s) =>
+        s.session?.eventId !== session.eventId
+          ? s
+          : {
+              ...s,
+              session: null,
+              items: [],
+              sales: {},
+              outbox: [],
+              parked: [],
+              tills: [],
+              outOfStock: [],
+              // Only a list this phone was in charge of is offered for the next event.
+              lastItems: isOrganiserOf(session) && s.items.length ? s.items : s.lastItems,
+            },
+      );
+    },
     [update],
   );
 

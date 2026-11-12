@@ -8,12 +8,17 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { act, render } from '@testing-library/react-native';
 import * as Cloud from '../cloud';
+import { listPastEvents, loadPastEvent } from '../history';
 import { StoreProvider, useStore } from '../store';
 import type { Item, OutboxOp, Sale, SaleLine } from '../types';
 
 jest.mock('@react-native-async-storage/async-storage', () =>
   require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
 );
+// Past events go to the same in-memory storage as everything else.
+jest.mock('../history-storage', () => ({
+  historyStorage: require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+}));
 jest.mock('expo-crypto', () => ({ randomUUID: () => require('node:crypto').randomUUID() }));
 jest.mock('../firebase', () => ({ cloudEnabled: true }));
 jest.mock('../cloud', () => ({
@@ -785,5 +790,86 @@ describe('tills and stock', () => {
     await act(async () => store.startLocalEvent('Autumn Fair', 'Till 1'));
 
     expect(store.outOfStock).toEqual([]);
+  });
+});
+
+describe('leaving an event', () => {
+  test('its sales are kept under past events', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    const kept = await sell('cash');
+    const voided = await sell('card');
+    await act(async () => store.setVoided(voided.id, true));
+    await act(() => store.leaveEvent());
+
+    expect(store.session).toBeNull();
+    expect(store.sales).toEqual({});
+    const [past] = await listPastEvents();
+    expect(past).toMatchObject({ name: 'Village Fair', mode: 'local', takings: kept.total, cash: kept.total, card: 0, count: 1 });
+    const found = await loadPastEvent(past.id);
+    expect(found?.sales.map((s) => s.id).sort()).toEqual([kept.id, voided.id].sort());
+  });
+
+  test('an event with no sales is not kept', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    await act(() => store.leaveEvent());
+
+    expect(await listPastEvents()).toEqual([]);
+  });
+
+  test('if the event cannot be saved, it stays until left without saving', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    const sale = await sell();
+    const setItem = jest.mocked(AsyncStorage.setItem);
+    const working = setItem.getMockImplementation()!;
+    setItem.mockImplementation((key, value) => (key.startsWith('cashtin:history') ? Promise.reject(new Error('disk full')) : working(key, value)));
+
+    await act(async () => {
+      await expect(store.leaveEvent()).rejects.toThrow('disk full');
+    });
+    expect(store.session?.eventName).toBe('Village Fair');
+    expect(store.sales[sale.id]).toBeDefined();
+
+    await act(() => store.leaveEvent({ skipHistory: true }));
+    expect(store.session).toBeNull();
+    setItem.mockImplementation(working);
+  });
+});
+
+describe('the price list for the next event', () => {
+  const CAKE: Item = { id: 'cake', name: 'Cake', price: 150, tills: ['Cake stall'] };
+
+  test('the last list is kept after leaving and survives a restart', async () => {
+    const firstRun = await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    await act(async () => store.setItems([CAKE]));
+    await act(() => store.leaveEvent());
+    await settle();
+    await firstRun.unmount();
+    await launch();
+
+    expect(store.lastItems).toEqual([CAKE]);
+  });
+
+  test('a this-phone-only event drops till assignments, a shared one keeps them', async () => {
+    await launch();
+    await act(async () => store.startLocalEvent('Autumn Fair', 'Till 1', [CAKE]));
+    expect(store.items).toEqual([{ id: 'cake', name: 'Cake', price: 150 }]);
+    await act(() => store.leaveEvent());
+
+    await act(() => store.createCloudEvent('Winter Fair', 'Cake stall', [CAKE]));
+    expect(cloud.createEvent).toHaveBeenCalledWith('Winter Fair', 'Cake stall', [CAKE]);
+    expect(store.items).toEqual([CAKE]);
+  });
+
+  test('a list from an event this phone only joined is not offered', async () => {
+    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [CAKE] });
+    await launch();
+    await act(() => store.joinCloudEvent('ABC234', 'Cake stall'));
+    await act(() => store.leaveEvent());
+
+    expect(store.lastItems).toBeNull();
   });
 });

@@ -92,6 +92,38 @@ export function Body({ children, muted }: { children: React.ReactNode; muted?: b
   return <Text style={{ color: muted ? t.muted : t.ink, fontSize: 15, lineHeight: 21 }}>{children}</Text>;
 }
 
+/** A pick-one row of options, shown side by side. */
+export function Choice<T extends string>({
+  options,
+  value,
+  onChange,
+}: {
+  options: { value: T; title: string; detail?: string }[];
+  value: T;
+  onChange: (value: T) => void;
+}) {
+  const t = useTheme();
+  return (
+    <View accessibilityRole="radiogroup" style={{ flexDirection: 'row', gap: 8 }}>
+      {options.map((o) => {
+        const on = o.value === value;
+        return (
+          <Pressable
+            key={o.value}
+            accessibilityRole="radio"
+            accessibilityState={{ selected: on }}
+            onPress={() => onChange(o.value)}
+            style={[s.choice, { borderColor: on ? t.accent : t.line, backgroundColor: on ? t.bg : t.surface, borderWidth: on ? 2 : 1, padding: on ? 11 : 12 }]}
+          >
+            <Text style={{ color: t.ink, fontSize: 15, fontWeight: '700' }}>{o.title}</Text>
+            {o.detail && <Text style={{ color: t.muted, fontSize: 13, lineHeight: 18 }}>{o.detail}</Text>}
+          </Pressable>
+        );
+      })}
+    </View>
+  );
+}
+
 /** Row of bunting triangles: the app's one decorative flourish. */
 export function Bunting() {
   const t = useTheme();
@@ -115,6 +147,7 @@ export const s = StyleSheet.create({
   label: { fontSize: 12, fontWeight: '700', letterSpacing: 1, textTransform: 'uppercase' },
   heading: { fontSize: 22, fontWeight: '800' },
   field: { borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 12, fontSize: 16 },
+  choice: { flex: 1, borderRadius: 12, gap: 2 },
   bunting: { flexDirection: 'row', overflow: 'hidden', height: 8 },
   flag: { width: 0, height: 0, borderLeftWidth: 7, borderRightWidth: 7, borderTopWidth: 8, borderLeftColor: 'transparent', borderRightColor: 'transparent' },
   num: { fontVariant: ['tabular-nums'] },

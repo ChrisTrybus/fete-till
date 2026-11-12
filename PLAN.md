@@ -53,7 +53,27 @@ Still to do:
 
 3. Float tracking: record each till's opening float so "cash in tin" matches the counted cash.
 4. Item categories and colours; hide items that have sold out.
-5. Reuse last year's price list when starting a new event.
+5. ~~Reuse last year's price list when starting a new event.~~ Done in the free tier work below.
+
+## Free tier (this phone only) and paid event packs
+
+The plan: a single till on one phone is free and needs no backend. Shared events with several tills will need a paid event pack, which also unlocks saved price lists. Until purchases exist, shared events stay free.
+
+Done (free tier):
+
+- Starting an event defaults to "Just this phone". "Several tills" is the other choice when sync is set up.
+- Past events. Leaving an event saves its sales on the phone (`expo-sqlite` key-value store; browser storage on web). The Past events screen lists them, and each one shows its figures and sales, with the summary, PDF and CSV exports. An event can be deleted from the phone.
+- The price list from the last event this phone ran is offered when starting the next one. Till assignments are dropped for a this-phone-only event.
+
+Not yet checked:
+
+- Past events have only been run in a browser, which uses browser storage. The SQLite store has not been run on a device.
+
+Still to do:
+
+1. Accounts: real sign-in, upgrading the anonymous user.
+2. Purchases: event packs, validated server-side; creating a shared event uses a credit.
+3. Paid features: history kept in the cloud, and saved named price lists.
 
 ## Phase 3: nice to have
 
