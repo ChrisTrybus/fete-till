@@ -1,4 +1,4 @@
-# Fete Till
+# Cash Tin
 
 A simple till for church fetes, school fairs and other fundraisers. Volunteers tap items, enter the cash handed over, and the app shows the change. Every till at the event syncs to one shared day total.
 

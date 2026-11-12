@@ -45,7 +45,7 @@ export default function Welcome() {
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView contentContainerStyle={{ padding: 16, gap: 16, maxWidth: 560, width: '100%', alignSelf: 'center' }}>
           <View style={{ gap: 4, paddingTop: 8 }}>
-            <Text style={{ fontSize: 34, fontWeight: '800', color: t.ink }}>Fete Till</Text>
+            <Text style={{ fontSize: 34, fontWeight: '800', color: t.ink }}>Cash Tin</Text>
             <Body muted>Take payments at your fete, fair or fundraiser, and add up every stall at the end of the day.</Body>
           </View>
 
