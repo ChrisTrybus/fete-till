@@ -41,7 +41,7 @@ const advice = (op: OutboxOp) =>
 /** Join code to share, this till's name, sync details, and leaving the event. */
 export default function EventScreen() {
   const t = useTheme();
-  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setGiftAidOver, setFloat, cardMode, setCardMode, pendingCard } =
+  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setGiftAidOver, setFloat, cardMode, setCardMode, pendingCard, cloudEnabled } =
     useStore();
   const [confirmClose, setConfirmClose] = useState(false);
   const [organiserCode, setOrganiserCode] = useState('');
@@ -365,6 +365,7 @@ export default function EventScreen() {
             onPress={() => (confirmLeave ? leave() : setConfirmLeave(true))}
           />
           <Button title="Past events" onPress={() => router.push('/history')} />
+          {cloudEnabled && <Button title="Account" onPress={() => router.push('/account')} />}
         </View>
       </Card>
     </ScrollView>

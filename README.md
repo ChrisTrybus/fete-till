@@ -26,7 +26,7 @@ Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
 ### Connect Firebase
 
 1. Create a project at console.firebase.google.com (the free Spark plan is enough).
-2. **Build > Authentication > Sign-in method:** enable **Anonymous**.
+2. **Build > Authentication > Sign-in method:** enable **Anonymous**. For accounts, also enable **Email/Password**, **Google** and **Apple**, and fill in the Google client ids in `.env` (see `.env.example`).
 3. **Build > Firestore Database:** create a database (choose `europe-west2` London, or another region near your users).
 4. **Project settings > Your apps:** add a **Web app** and copy its config.
 5. `cp .env.example .env` and paste the values in.
@@ -74,9 +74,11 @@ src/app/                 screens (Expo Router)
   (tabs)/items.tsx       price list editor
   (tabs)/day.tsx         day total, voids, CSV export
   (tabs)/event.tsx       join code, till name, sync status, leave
+  account.tsx            sign in to a Cash Tin account
 src/lib/store.tsx        app state, local storage and the sync outbox
 src/lib/cloud.ts         Firestore reads and writes
 src/lib/firebase.ts      Firebase setup and anonymous sign-in
+src/lib/account.ts       accounts: email, Google and Apple sign-in, linked to the anonymous user
 src/lib/totals.ts        day-total maths and CSV
 src/lib/money.ts         pence formatting and price-list parsing
 src/lib/haptics.ts       touch feedback on the till
