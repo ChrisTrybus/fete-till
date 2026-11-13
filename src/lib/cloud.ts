@@ -1,6 +1,6 @@
 // Firestore layout (see firestore.rules for who can do what):
 //   codes/{CODE}                      { eventId }            join code -> event lookup
-//   events/{eventId}                  { name, code, createdBy, createdAt, items[], closedAt? }
+//   events/{eventId}                  { name, code, createdBy, createdAt, items[], closedAt?, giftAidOver? }
 //   events/{eventId}/members/{uid}    { code, tillName, joinedAt, deviceId?, float? }
 //   events/{eventId}/private/organiser { code }             organiser code; no device can read it
 //   events/{eventId}/organisers/{uid} { code, claimedAt }   devices that have proved they know it
@@ -116,8 +116,12 @@ export async function joinEvent(rawCode: string, tillName: string, deviceId?: st
       // Joining has worked. The float can be entered again on the Event tab.
     }
   }
-  return { eventId, code, eventName: (data.name as string) ?? 'Event', items: (data.items as Item[]) ?? [], float };
+  return { eventId, code, eventName: (data.name as string) ?? 'Event', items: (data.items as Item[]) ?? [], float, giftAidOver: giftAidOverOf(data) };
 }
+
+/** The event's Gift Aid setting: null (declarations off) unless it holds a sensible amount. */
+const giftAidOverOf = (d: DocumentData): number | null =>
+  typeof d.giftAidOver === 'number' && d.giftAidOver >= 0 ? d.giftAidOver : null;
 
 /**
  * (Re)registers this device's anonymous user as a member. Safe to call on every launch.
@@ -163,6 +167,9 @@ export async function pushOp(eventId: string, op: OutboxOp) {
     case 'close':
       await withTimeout(updateDoc(event, { closedAt: op.closedAt }));
       break;
+    case 'giftAidSetting':
+      await withTimeout(updateDoc(event, { giftAidOver: op.over }));
+      break;
     case 'giftAid':
       await withTimeout(setDoc(doc(event, 'giftAid', op.declaration.saleId), { ...op.declaration, createdBy: uid }));
       break;
@@ -178,7 +185,7 @@ export async function saleExists(eventId: string, saleId: string) {
 
 export function watchEvent(
   eventId: string,
-  onEvent: (e: { name: string; items: Item[]; closedAt: number | null }) => void,
+  onEvent: (e: { name: string; items: Item[]; closedAt: number | null; giftAidOver?: number | null }) => void,
   onSales: (sales: Sale[]) => void,
   onError: (e: Error) => void,
   /** Called with every phone that has joined the event: its till name and opening float. */
@@ -189,7 +196,7 @@ export function watchEvent(
     event,
     (s) => {
       const d = s.data();
-      if (d) onEvent({ name: d.name ?? 'Event', items: d.items ?? [], closedAt: d.closedAt ?? null });
+      if (d) onEvent({ name: d.name ?? 'Event', items: d.items ?? [], closedAt: d.closedAt ?? null, giftAidOver: giftAidOverOf(d) });
     },
     onError,
   );

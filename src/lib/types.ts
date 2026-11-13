@@ -13,6 +13,7 @@ export type Item = {
   // Items in one category share a colour. Left out to have one picked automatically.
   colour?: string;
   // A donation rather than something bought. Only donations can have Gift Aid claimed on them.
+  // A donation with a price of 0 has no set amount: the till asks how much is being given.
   donation?: boolean;
 };
 
@@ -55,6 +56,10 @@ export type Session = {
   organiserCode?: string;
   // When an organiser closed the event (epoch ms). While set, tills take no new sales.
   closedAt?: number | null;
+  // Whether tills take Gift Aid declarations, set by an organiser for the whole event.
+  // Missing or null: they don't. A number: the till offers a declaration after a
+  // donation of more than this many pence (0 offers it after every donation).
+  giftAidOver?: number | null;
   // When this phone started or joined the event (epoch ms).
   startedAt?: number;
   // Cash put in this till's tin before the first sale (pence), so the counted cash can be checked.
@@ -110,6 +115,7 @@ export type OutboxOp =
   | { kind: 'void'; saleId: string; voided: boolean }
   | { kind: 'items'; items: Item[] }
   | { kind: 'close'; closedAt: number | null } // null reopens the event
+  | { kind: 'giftAidSetting'; over: number | null } // null turns declarations off
   | { kind: 'giftAid'; declaration: GiftAidDeclaration };
 
 // A change the server refused outright (not a lost connection). It is set aside so
