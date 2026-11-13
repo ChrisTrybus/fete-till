@@ -107,11 +107,16 @@ export default function DayTotal() {
           <Heading>Donations</Heading>
           <Row header cells={['', 'Amount']} />
           <Row cells={['Donations taken', formatPence(aid.donations)]} />
-          <Row cells={[`Small, no declaration (${aid.smallCount})`, formatPence(aid.small)]} />
-          <Body muted>
-            Small means {formatPence(SMALL_DONATION_MAX)} or less. Those given in cash or by contactless card may qualify for HMRC’s
-            Gift Aid Small Donations Scheme, which needs no declaration. Your treasurer will know if the charity can use it.
-          </Body>
+          {/* Only an organiser's phone hears every till's declarations, so only it can say which donations have none. */}
+          {isOrganiser && (
+            <>
+              <Row cells={[`Small, no declaration (${aid.smallCount})`, formatPence(aid.small)]} />
+              <Body muted>
+                Small means {formatPence(SMALL_DONATION_MAX)} or less. Those given in cash or by contactless card may qualify for
+                HMRC’s Gift Aid Small Donations Scheme, which needs no declaration. Your treasurer will know if the charity can use it.
+              </Body>
+            </>
+          )}
           {(giftAidOn || aid.count > 0) && (
             <>
               <Row cells={[`With a declaration (${aid.count})`, formatPence(aid.declared)]} />

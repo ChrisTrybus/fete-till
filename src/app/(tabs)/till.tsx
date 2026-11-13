@@ -74,7 +74,10 @@ export default function Till() {
   const [donationFor, setDonationFor] = useState<Item | null>(null);
   // The last sale, if it held a donation large enough to offer Gift Aid on. The offer is
   // a button beside the "Saved" message, so the next customer can be served without answering it.
-  const [giftAidOffer, setGiftAidOffer] = useState<Sale | null>(null);
+  const [offered, setGiftAidOffer] = useState<Sale | null>(null);
+  // Checked against the setting as it is now: an organiser may have turned declarations
+  // off, or raised the amount, since the sale was taken.
+  const giftAidOffer = offered && offersGiftAid(offered, giftAidOver) ? offered : null;
   // A sale whose donor is filling in a Gift Aid declaration.
   const [giftAidFor, setGiftAidFor] = useState<Sale | null>(null);
 
