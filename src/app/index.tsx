@@ -126,6 +126,7 @@ export default function Welcome() {
           {error && <Text style={{ color: t.danger, fontWeight: '700' }}>{error}</Text>}
 
           <Button title="Past events" onPress={() => router.push('/history')} />
+          {store.cloudEnabled && <Button title="Account" onPress={() => router.push('/account')} />}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
