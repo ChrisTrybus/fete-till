@@ -2,10 +2,33 @@
 // as long as the donor has made a declaration with their name and home address.
 // It applies to donations only, never to something bought, so only price-list items
 // marked as donations count.
-import type { GiftAidDeclaration, Sale } from './types';
+import type { GiftAidDeclaration, Item, Sale } from './types';
 
 /** HMRC adds 25p for every £1 donated. */
 export const GIFT_AID_RATE = 0.25;
+
+/**
+ * The most a single donation can be (pence) to count under HMRC's Gift Aid Small
+ * Donations Scheme, which tops up small cash and contactless donations with no
+ * declaration. Also where the till starts offering a declaration by default.
+ */
+export const SMALL_DONATION_MAX = 3000;
+
+/** A donation with no set amount: the till asks how much is being given. */
+export const isOpenDonation = (item: Pick<Item, 'donation' | 'price'>) => Boolean(item.donation) && item.price === 0;
+
+/**
+ * Whether the till should offer a Gift Aid declaration after this sale. `over` is the
+ * event's setting: null when declarations are off, otherwise the donation (pence) that
+ * must be exceeded.
+ */
+export const offersGiftAid = (sale: Pick<Sale, 'lines'>, over: number | null | undefined) => {
+  const amount = donationIn(sale);
+  return over != null && amount > 0 && amount > over;
+};
+
+/** What rounding a total (pence) up to the next whole pound would add. 0 if it is already whole. */
+export const roundUpBy = (total: number) => (100 - (total % 100)) % 100;
 
 /** Field lengths HMRC accepts on a Gift Aid schedule. */
 export const MAX_NAME = 35;
@@ -53,6 +76,10 @@ export type GiftAidTotals = {
   claimable: number;
   /** Declarations that count: their sale hasn't been voided. */
   count: number;
+  /** Donations of SMALL_DONATION_MAX or less with no declaration (pence). */
+  small: number;
+  /** How many sales those were in. */
+  smallCount: number;
 };
 
 /**
@@ -67,11 +94,17 @@ export function liveDeclarations(sales: Sale[], declarations: GiftAidDeclaration
 export function giftAidTotals(sales: Sale[], declarations: GiftAidDeclaration[]): GiftAidTotals {
   const live = liveDeclarations(sales, declarations);
   const declared = live.reduce((t, d) => t + d.amount, 0);
+  const withDeclaration = new Set(live.map((d) => d.saleId));
+  const given = sales.filter((s) => !s.voided).map((s) => ({ id: s.id, amount: donationIn(s) }));
+  // One sale is one donor, so the limit is checked against the donation in each sale.
+  const small = given.filter((g) => g.amount > 0 && g.amount <= SMALL_DONATION_MAX && !withDeclaration.has(g.id));
   return {
-    donations: sales.filter((s) => !s.voided).reduce((t, s) => t + donationIn(s), 0),
+    donations: given.reduce((t, g) => t + g.amount, 0),
     declared,
     claimable: live.reduce((t, d) => t + giftAidOn(d.amount), 0),
     count: live.length,
+    small: small.reduce((t, g) => t + g.amount, 0),
+    smallCount: small.length,
   };
 }
 

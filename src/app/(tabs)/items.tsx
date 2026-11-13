@@ -3,6 +3,7 @@ import { useState } from 'react';
 import { KeyboardAvoidingView, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { Body, Button, Card, Field, Heading, s, useTheme } from '@/components/ui';
 import { categoriesOf, categoryKey, COLOURS, tileColours, type Colour } from '@/lib/categories';
+import { isOpenDonation } from '@/lib/giftaid';
 import { formatPence, parsePounds, parsePriceList } from '@/lib/money';
 import { MAX_ITEMS, useStore } from '@/lib/store';
 import { tillKey, toggleTill, uniqueTills } from '@/lib/tills';
@@ -11,7 +12,11 @@ import type { Item } from '@/lib/types';
 type Draft = { id: string; name: string; price: string; tills?: string[]; category?: string; colour?: string; donation?: boolean };
 
 const toDraft = (items: Item[]): Draft[] =>
-  items.map((i) => ({ id: i.id, name: i.name, price: (i.price / 100).toFixed(2), tills: i.tills, category: i.category, colour: i.colour, donation: i.donation }));
+  // A donation with no set amount is shown with its price box empty.
+  items.map((i) => ({ id: i.id, name: i.name, price: isOpenDonation(i) ? '' : (i.price / 100).toFixed(2), tills: i.tills, category: i.category, colour: i.colour, donation: i.donation }));
+
+/** The price in pence, or null if it can't be saved. A donation's can be left empty: the donor chooses the amount. */
+const priceOf = (d: Draft): number | null => (d.donation && !d.price.trim() ? 0 : parsePounds(d.price));
 
 /** Edit the shared price list. Changes are saved together so every till updates at once. */
 export default function PriceList() {
@@ -60,7 +65,7 @@ export default function PriceList() {
     setMessage(null);
     setDraft((d) => d.map((x) => (x.id === id ? { ...x, ...patch } : x)));
   };
-  const invalid = draft.filter((d) => !d.name.trim() || parsePounds(d.price) === null);
+  const invalid = draft.filter((d) => !d.name.trim() || priceOf(d) === null);
   const tooMany = session?.mode === 'cloud' && draft.length > MAX_ITEMS;
 
   const save = () => {
@@ -70,7 +75,7 @@ export default function PriceList() {
       draft.map((d) => ({
         id: d.id,
         name: d.name.trim(),
-        price: parsePounds(d.price)!,
+        price: priceOf(d)!,
         ...(d.tills?.length ? { tills: d.tills } : {}),
         ...(spelling(d.category) ? { category: spelling(d.category) } : {}),
         ...(d.colour ? { colour: d.colour } : {}),
@@ -121,7 +126,7 @@ export default function PriceList() {
                   </Text>
                 ) : null}
               </View>
-              <Text style={[s.num, { color: t.ink, fontSize: 16 }]}>{formatPence(i.price)}</Text>
+              <Text style={[s.num, { color: t.ink, fontSize: 16 }]}>{isOpenDonation(i) ? 'Any amount' : formatPence(i.price)}</Text>
             </View>
           ))}
         </Card>
@@ -158,24 +163,24 @@ export default function PriceList() {
           {draft.length > 0 && (
             <>
               <Body muted>
-                Categories such as Drinks or Cakes group the items on the till, each in its own colour. Mark donations here too: after a
-                sale with a donation, the till asks about Gift Aid.
+                Categories such as Drinks or Cakes group the items on the till, each in its own colour.
               </Body>
-              <Button title={grouping ? 'Done with categories' : 'Set categories, colours and donations'} onPress={() => setGrouping((v) => !v)} />
+              <Button title={grouping ? 'Done with categories' : 'Set categories and colours'} onPress={() => setGrouping((v) => !v)} />
             </>
           )}
           {draft.map((d) => {
-            const bad = !d.name.trim() || parsePounds(d.price) === null;
+            const bad = !d.name.trim() || priceOf(d) === null;
             const on = (till: string) => Boolean(d.tills?.some((x) => tillKey(x) === tillKey(till)));
             return (
               <View key={d.id} style={{ gap: 6 }}>
               <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
-                <Field value={d.name} onChangeText={(name) => edit(d.id, { name })} placeholder="Item" style={{ flex: 1, minWidth: 0 }} />
+                <Field value={d.name} onChangeText={(name) => edit(d.id, { name })} placeholder={d.donation ? 'Donation' : 'Item'} style={{ flex: 1, minWidth: 0 }} />
                 <Field
                   value={d.price}
                   onChangeText={(price) => edit(d.id, { price })}
                   keyboardType="decimal-pad"
-                  accessibilityLabel={`Price of ${d.name} in pounds`}
+                  placeholder={d.donation ? 'Any' : undefined}
+                  accessibilityLabel={d.donation ? `Amount of ${d.name} in pounds. Leave empty for any amount` : `Price of ${d.name} in pounds`}
                   style={[s.num, { width: 84, textAlign: 'right', borderColor: bad ? t.danger : t.line }]}
                 />
                 <Pressable
@@ -207,12 +212,8 @@ export default function PriceList() {
               {grouping ? (
                 <View style={{ gap: 8, paddingBottom: 10 }}>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
-                    <Chip
-                      title="Donation (Gift Aid)"
-                      label={`${d.name}: a donation, eligible for Gift Aid`}
-                      selected={Boolean(d.donation)}
-                      onPress={() => edit(d.id, { donation: !d.donation })}
-                    />
+                    <Chip title="Something sold" label={`${d.name}: something sold`} selected={!d.donation} onPress={() => edit(d.id, { donation: false })} />
+                    <Chip title="A donation" label={`${d.name}: a donation, with nothing given in return`} selected={Boolean(d.donation)} onPress={() => edit(d.id, { donation: true })} />
                   </View>
                   <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
                     <Chip title="No category" label={`${d.name}: no category`} selected={!categoryKey(d.category)} onPress={() => setCategory(d.id, undefined)} />
@@ -257,19 +258,28 @@ export default function PriceList() {
                   <View style={{ width: 12, height: 12, borderRadius: 6, backgroundColor: t.tiles[colours.get(d.id) ?? 'red'] }} />
                   <Text style={{ color: t.muted, fontSize: 13 }}>
                     {d.category?.trim() || 'No category'}
-                    {d.donation ? ' · Donation' : ''}
                   </Text>
+                  {d.donation ? <Tag title={d.price.trim() ? 'Donation' : 'Donation · any amount'} /> : null}
                 </View>
               )}
               </View>
             );
           })}
-          <Button
-            title="Add item"
-            onPress={() => setDraft((d) => [...d, { id: randomUUID(), name: '', price: '' }])}
-          />
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button title="Add item" onPress={() => setDraft((d) => [...d, { id: randomUUID(), name: '', price: '' }])} style={{ flex: 1 }} />
+            <Button
+              title="Add a donation"
+              onPress={() => setDraft((d) => [...d, { id: randomUUID(), name: 'Donation', price: '', donation: true }])}
+              style={{ flex: 1 }}
+            />
+          </View>
+          <Body muted>
+            A donation is money given freely, with nothing in return. Leave its amount empty and the till asks how much is being
+            given, and can round a sale up to the next pound. Gift Aid can only be claimed on donations, never on things sold, so
+            don’t mark a coffee or a raffle ticket as one.
+          </Body>
           <Button title="Save price list" kind="primary" disabled={!dirty || invalid.length > 0 || tooMany} onPress={save} />
-          {invalid.length > 0 && <Body muted>Each item needs a name and a price like 1.50.</Body>}
+          {invalid.length > 0 && <Body muted>Each item needs a name and a price like 1.50. Only a donation can have its amount left empty.</Body>}
           {tooMany && (
             <Body muted>
               A shared price list can have up to {MAX_ITEMS} items. This one has {draft.length}.
@@ -293,6 +303,16 @@ export default function PriceList() {
         </Card>
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+/** A small label on a price-list row, marking it out as a donation. */
+function Tag({ title }: { title: string }) {
+  const t = useTheme();
+  return (
+    <View style={{ paddingHorizontal: 8, paddingVertical: 2, borderRadius: 999, borderWidth: 1, borderColor: t.accent }}>
+      <Text style={{ color: t.accent, fontSize: 12, fontWeight: '700' }}>{title}</Text>
+    </View>
   );
 }
 

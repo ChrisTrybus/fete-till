@@ -5,7 +5,7 @@ import { Row, Stat } from '@/components/figures';
 import { GiftAidPrompt } from '@/components/gift-aid';
 import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
 import { cashToCount } from '@/lib/floats';
-import { donationIn, giftAidCsv, giftAidTotals } from '@/lib/giftaid';
+import { donationIn, giftAidCsv, giftAidTotals, SMALL_DONATION_MAX } from '@/lib/giftaid';
 import { formatPence } from '@/lib/money';
 import { sharePdf } from '@/lib/share-pdf';
 import { useStore } from '@/lib/store';
@@ -18,6 +18,8 @@ export default function DayTotal() {
   const t = useTheme();
   const { sales, setVoided, session, parked, isOrganiser, deviceId, floats, giftAid } = useStore();
   const declarations = useMemo(() => Object.values(giftAid), [giftAid]);
+  // Whether the organiser has turned Gift Aid declarations on for the event.
+  const giftAidOn = session?.giftAidOver != null;
   // A sale whose donor has come back to Gift Aid their donation.
   const [giftAidFor, setGiftAidFor] = useState<Sale | null>(null);
   const [giftAidMessage, setGiftAidMessage] = useState<string | null>(null);
@@ -102,12 +104,21 @@ export default function DayTotal() {
 
       {(aid.donations > 0 || aid.count > 0) && (
         <Card>
-          <Heading>Gift Aid</Heading>
+          <Heading>Donations</Heading>
           <Row header cells={['', 'Amount']} />
           <Row cells={['Donations taken', formatPence(aid.donations)]} />
-          <Row cells={[`With a declaration (${aid.count})`, formatPence(aid.declared)]} />
-          <Row cells={['Gift Aid to claim', formatPence(aid.claimable)]} />
-          {isOrganiser ? (
+          <Row cells={[`Small, no declaration (${aid.smallCount})`, formatPence(aid.small)]} />
+          <Body muted>
+            Small means {formatPence(SMALL_DONATION_MAX)} or less. Those given in cash or by contactless card may qualify for HMRC’s
+            Gift Aid Small Donations Scheme, which needs no declaration. Your treasurer will know if the charity can use it.
+          </Body>
+          {(giftAidOn || aid.count > 0) && (
+            <>
+              <Row cells={[`With a declaration (${aid.count})`, formatPence(aid.declared)]} />
+              <Row cells={['Gift Aid to claim on those', formatPence(aid.claimable)]} />
+            </>
+          )}
+          {!giftAidOn && aid.count === 0 ? null : isOrganiser ? (
             <>
               <Body muted>
                 The export is laid out like HMRC’s Gift Aid schedule, ready to paste into the claim. It holds donors’ names and
@@ -194,7 +205,7 @@ export default function DayTotal() {
                 {giftAid[sale.id] ? ' · Gift Aid' : ''}
               </Text>
               {/* A donor who said no at the till, or came back later, can still Gift Aid it. */}
-              {!sale.voided && !giftAid[sale.id] && sale.deviceId === deviceId && donationIn(sale) > 0 && (
+              {giftAidOn && !sale.voided && !giftAid[sale.id] && sale.deviceId === deviceId && donationIn(sale) > 0 && (
                 <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setGiftAidFor(sale)}>
                   <Text style={{ color: t.accent, fontWeight: '700' }}>Add Gift Aid</Text>
                 </Pressable>

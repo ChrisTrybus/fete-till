@@ -1,4 +1,4 @@
-import { declarationProblems, donationIn, giftAidCsv, giftAidOn, giftAidTotals, normalisePostcode } from '../giftaid';
+import { declarationProblems, donationIn, giftAidCsv, giftAidOn, giftAidTotals, isOpenDonation, normalisePostcode, offersGiftAid, roundUpBy } from '../giftaid';
 import { ago, standings, standingsText } from '../leaderboard';
 import { summaryText } from '../summary';
 import type { GiftAidDeclaration, Sale } from '../types';
@@ -63,7 +63,38 @@ describe('Gift Aid', () => {
   test('totals count every donation, and claim only on declared ones whose sale still stands', () => {
     const sales = [sale('a'), sale('b'), sale('c', { voided: true })];
     const declarations = [declaration('a'), declaration('c')];
-    expect(giftAidTotals(sales, declarations)).toEqual({ donations: 1000, declared: 500, claimable: 125, count: 1 });
+    // Sale b has no declaration and is small enough to need none.
+    expect(giftAidTotals(sales, declarations)).toEqual({ donations: 1000, declared: 500, claimable: 125, count: 1, small: 500, smallCount: 1 });
+  });
+
+  test('small donations are those of £30 or less with no declaration', () => {
+    const giving = (id: string, pence: number) => sale(id, { lines: [{ itemId: 'don', name: 'Donation', price: pence, qty: 1, donation: true }] });
+    const sales = [giving('a', 3000), giving('b', 3001), giving('c', 40), sale('d', { lines: [{ itemId: 'tea', name: 'Tea', price: 80, qty: 1 }] })];
+    expect(giftAidTotals(sales, [declaration('c', { amount: 40 })])).toMatchObject({ donations: 6041, small: 3000, smallCount: 1 });
+  });
+
+  test('a declaration is offered only when it is turned on and the donation is over the event’s amount', () => {
+    const a = sale('a'); // a £5 donation alongside a slice of cake
+    expect(offersGiftAid(a, null)).toBe(false);
+    expect(offersGiftAid(a, undefined)).toBe(false);
+    expect(offersGiftAid(a, 3000)).toBe(false);
+    expect(offersGiftAid(a, 500)).toBe(false);
+    expect(offersGiftAid(a, 499)).toBe(true);
+    expect(offersGiftAid(a, 0)).toBe(true);
+    // Something bought is never offered Gift Aid, whatever the setting.
+    expect(offersGiftAid(sale('b', { lines: [{ itemId: 'tea', name: 'Tea', price: 5000, qty: 1 }] }), 0)).toBe(false);
+  });
+
+  test('rounding up adds what takes a total to the next whole pound', () => {
+    expect(roundUpBy(260)).toBe(40);
+    expect(roundUpBy(1)).toBe(99);
+    expect(roundUpBy(300)).toBe(0);
+  });
+
+  test('only a donation with no price asks for an amount', () => {
+    expect(isOpenDonation({ donation: true, price: 0 })).toBe(true);
+    expect(isOpenDonation({ donation: true, price: 500 })).toBe(false);
+    expect(isOpenDonation({ price: 0 })).toBe(false);
   });
 
   test('a declaration whose sale hasn’t arrived yet still counts', () => {

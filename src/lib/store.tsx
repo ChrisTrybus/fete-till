@@ -28,7 +28,7 @@ type Persisted = {
   parked: ParkedOp[];
   // The price list and closed state as last heard from the server. Saved so that a
   // refused change can still be discarded after a restart with no signal.
-  shared: { eventId: string; items: Item[]; closedAt: number | null } | null;
+  shared: { eventId: string; items: Item[]; closedAt: number | null; giftAidOver?: number | null } | null;
   // Names of the tills that have joined the event, as last heard from the server.
   tills: string[];
   // The phones that have joined the event, with each one’s opening float, as last heard from the server.
@@ -84,6 +84,11 @@ type Store = Persisted & {
   setOutOfStock: (itemId: string, out: boolean) => void;
   /** Closes the event, so tills stop taking sales, or reopens it. Works with no signal; other tills hear when it sends. */
   setClosed: (closed: boolean) => void;
+  /**
+   * Turns Gift Aid declarations on for every till, offered after a donation of more than `over`
+   * pence, or off with null. Works with no signal; other tills hear when it sends.
+   */
+  setGiftAidOver: (over: number | null) => void;
   recordSale: (lines: SaleLine[], method: PaymentMethod, tendered: number) => Sale;
   setVoided: (saleId: string, voided: boolean) => void;
   /**
@@ -140,6 +145,7 @@ function refusalReason(op: OutboxOp, organiser: boolean): string {
   }
   if (op.kind === 'close') return organiser ? 'The event would not accept this change.' : 'Only the organiser can close or reopen the event.';
   if (op.kind === 'giftAid') return 'The event would not accept this Gift Aid declaration.';
+  if (op.kind === 'giftAidSetting') return organiser ? 'The event would not accept this change.' : 'Only the organiser can turn Gift Aid declarations on or off.';
   return organiser ? 'The event would not accept this change.' : 'Only the organiser can void or restore another till’s sale.';
 }
 
@@ -148,6 +154,7 @@ function park(s: Persisted, op: OutboxOp): Persisted {
   const sameTarget = (o: OutboxOp) =>
     (op.kind === 'items' && o.kind === 'items') ||
     (op.kind === 'close' && o.kind === 'close') ||
+    (op.kind === 'giftAidSetting' && o.kind === 'giftAidSetting') ||
     (op.kind === 'void' && o.kind === 'void' && o.saleId === op.saleId) ||
     (op.kind === 'sale' && o.kind === 'sale' && o.sale.id === op.sale.id) ||
     (op.kind === 'giftAid' && o.kind === 'giftAid' && o.declaration.saleId === op.declaration.saleId);
@@ -340,10 +347,15 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             const pending = (kind: OutboxOp['kind']) => s.outbox.some((o) => o.kind === kind) || s.parked.some((p) => p.op.kind === kind);
             return {
               ...s,
-              shared: { eventId: session.eventId, items: ev.items, closedAt: ev.closedAt },
+              shared: { eventId: session.eventId, items: ev.items, closedAt: ev.closedAt, giftAidOver: ev.giftAidOver ?? null },
               items: pending('items') ? s.items : ev.items,
               session: s.session
-                ? { ...s.session, eventName: ev.name, closedAt: pending('close') ? s.session.closedAt : ev.closedAt }
+                ? {
+                    ...s.session,
+                    eventName: ev.name,
+                    closedAt: pending('close') ? s.session.closedAt : ev.closedAt,
+                    giftAidOver: pending('giftAidSetting') ? s.session.giftAidOver : (ev.giftAidOver ?? null),
+                  }
                 : s.session,
             };
           }),
@@ -464,7 +476,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       else markRegistered(ev.eventId);
       update((s) => ({
         ...s,
-        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), ...(ev.float ? { float: ev.float } : {}) },
+        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), giftAidOver: ev.giftAidOver ?? null, ...(ev.float ? { float: ev.float } : {}) },
         items: ev.items,
         sales: {},
         outbox: [],
@@ -580,6 +592,21 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         parked: s.parked.filter((p) => p.op.kind !== 'close'),
       }));
       enqueue({ kind: 'close', closedAt });
+    },
+    [update, enqueue],
+  );
+
+  const setGiftAidOver = useCallback(
+    (over: number | null) => {
+      const value = over === null ? null : Math.max(0, Math.round(over));
+      // A new choice replaces any earlier one, whether still queued or refused.
+      update((s) => ({
+        ...s,
+        session: s.session ? { ...s.session, giftAidOver: value } : s.session,
+        outbox: s.outbox.filter((o) => o.kind !== 'giftAidSetting'),
+        parked: s.parked.filter((p) => p.op.kind !== 'giftAidSetting'),
+      }));
+      enqueue({ kind: 'giftAidSetting', over: value });
     },
     [update, enqueue],
   );
@@ -759,6 +786,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         const shared = s.shared?.eventId === s.session?.eventId ? s.shared : null;
         if (!shared || !s.session) return s;
         if (op.kind === 'items') return { ...s, parked, items: shared.items };
+        if (op.kind === 'giftAidSetting') return { ...s, parked, session: { ...s.session, giftAidOver: shared.giftAidOver ?? null } };
         return { ...s, parked, session: { ...s.session, closedAt: shared.closedAt } };
       });
     },
@@ -785,6 +813,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setItems,
       setOutOfStock,
       setClosed,
+      setGiftAidOver,
       recordSale,
       setVoided,
       recordGiftAid,
@@ -812,6 +841,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       setItems,
       setOutOfStock,
       setClosed,
+      setGiftAidOver,
       recordSale,
       setVoided,
       recordGiftAid,

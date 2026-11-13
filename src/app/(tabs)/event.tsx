@@ -2,6 +2,7 @@ import { router } from 'expo-router';
 import { useState } from 'react';
 import { ScrollView, Share, Text, View } from 'react-native';
 import { Body, Button, Card, Choice, Field, Heading, Label, useTheme } from '@/components/ui';
+import { SMALL_DONATION_MAX } from '@/lib/giftaid';
 import { formatPence, parsePounds } from '@/lib/money';
 import { useStore, type CardMode } from '@/lib/store';
 import { sumupAvailable, sumupUnavailableReason } from '@/lib/sumup-open';
@@ -18,6 +19,10 @@ const describe = (op: OutboxOp) =>
         ? op.closedAt
           ? 'Closing the event'
           : 'Reopening the event'
+        : op.kind === 'giftAidSetting'
+        ? op.over === null
+          ? 'Turning Gift Aid declarations off'
+          : 'Turning Gift Aid declarations on'
         : op.voided
         ? 'Voiding a sale'
         : 'Restoring a voided sale';
@@ -29,14 +34,14 @@ const advice = (op: OutboxOp) =>
     ? 'If you are an organiser, fix it on the Price list tab and save again. Otherwise discard to go back to the list the other tills have.'
     : op.kind === 'sale'
       ? 'It stays in this phone’s Day total and CSV export. If it should not count, void it on the Day total tab.'
-      : op.kind === 'close'
+      : op.kind === 'close' || op.kind === 'giftAidSetting'
         ? 'Discard to go back to what the other tills see.'
         :'Discard to put the sale back as the other tills see it.';
 
 /** Join code to share, this till's name, sync details, and leaving the event. */
 export default function EventScreen() {
   const t = useTheme();
-  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setFloat, cardMode, setCardMode, pendingCard } =
+  const { session, setTillName, outbox, parked, syncStatus, syncError, flushNow, retryParked, discardParked, leaveEvent, isOrganiser, claimOrganiser, setClosed, setGiftAidOver, setFloat, cardMode, setCardMode, pendingCard } =
     useStore();
   const [confirmClose, setConfirmClose] = useState(false);
   const [organiserCode, setOrganiserCode] = useState('');
@@ -48,6 +53,9 @@ export default function EventScreen() {
   const [float, setFloatText] = useState(savedFloat ? (savedFloat / 100).toFixed(2) : '');
   // An empty box means no float.
   const floatPence = float.trim() ? parsePounds(float) : 0;
+  const giftAidOn = session?.giftAidOver != null;
+  const [overText, setOverText] = useState(((session?.giftAidOver ?? SMALL_DONATION_MAX) / 100).toFixed(2));
+  const overPence = parsePounds(overText);
   const [confirmLeave, setConfirmLeave] = useState(false);
   const [leaving, setLeaving] = useState(false);
   // Set when the event couldn't be saved to Past events, so leaving would lose its sales.
@@ -205,6 +213,61 @@ export default function EventScreen() {
           <Body muted>Take the card on your own reader, then tap Card to record the sale. {sumupUnavailableReason()}</Body>
         )}
       </Card>
+
+      {isOrganiser ? (
+        <Card>
+          <Label>Gift Aid declarations</Label>
+          <Body muted>
+            Gift Aid is only for donations, never for things sold. To claim it on a donation, the charity needs the donor’s name
+            and home address, which takes a minute at the till. Leave this off unless your treasurer has asked for declarations.
+          </Body>
+          <Choice<'off' | 'on'>
+            options={[
+              { value: 'off', title: 'Off', detail: 'Tills never ask for a donor’s details.' },
+              { value: 'on', title: 'On', detail: 'After a larger donation, the till shows an Add Gift Aid button.' },
+            ]}
+            value={giftAidOn ? 'on' : 'off'}
+            onChange={(v) => {
+              if ((v === 'on') === giftAidOn) return;
+              setOverText((SMALL_DONATION_MAX / 100).toFixed(2));
+              setGiftAidOver(v === 'on' ? SMALL_DONATION_MAX : null);
+            }}
+          />
+          {giftAidOn && (
+            <>
+              <Label>Offer it for donations over</Label>
+              <Field
+                value={overText}
+                onChangeText={setOverText}
+                placeholder="e.g. 30.00"
+                keyboardType="decimal-pad"
+                accessibilityLabel="Offer Gift Aid for donations over this many pounds"
+                style={{ borderColor: overPence === null ? t.danger : t.line }}
+              />
+              <Button title="Change amount" disabled={overPence === null || overPence === session.giftAidOver} onPress={() => setGiftAidOver(overPence ?? 0)} />
+              <Body muted>
+                {overPence === null
+                  ? 'Type an amount like 30 or 30.00. Use 0 to offer it after every donation.'
+                  : `The till offers a declaration after a donation of more than ${formatPence(session.giftAidOver ?? 0)}. It is a button, not a pop-up, so a busy till can carry on. Smaller donations are totalled on Day total. A donor can still ask to Gift Aid any donation there.`}
+              </Body>
+              <Body muted>
+                Donations of {formatPence(SMALL_DONATION_MAX)} or less in cash or by contactless card may qualify for HMRC’s Gift Aid
+                Small Donations Scheme, which needs no declaration. Check with your treasurer.
+              </Body>
+            </>
+          )}
+        </Card>
+      ) : (
+        giftAidOn && (
+          <Card>
+            <Label>Gift Aid declarations</Label>
+            <Body muted>
+              The organiser has turned these on. After a donation of more than {formatPence(session.giftAidOver ?? 0)}, the till shows an
+              Add Gift Aid button. Only donations count, never things sold.
+            </Body>
+          </Card>
+        )
+      )}
 
       {session.closedAt ? (
         <Card style={{ borderColor: t.accent }}>
