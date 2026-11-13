@@ -83,11 +83,22 @@ Not yet checked:
 
 - Past events have only been run in a browser, which uses browser storage. The SQLite store has not been run on a device.
 
+Done (accounts):
+
+- An Account screen, opened from the start screen and the Event tab when sync is set up. Sign-in is by email and password, Google, or Apple (iOS only, as Apple requires; not offered in a browser). Google needs native code, so it is only offered in a build of the app, never Expo Go; in a browser it uses Firebase's pop-up.
+- Making an account links the new sign-in to the phone's anonymous user, so its user id stays the same and it keeps its place, organiser role and own sales in any event. Signing in to an account that already exists changes the id, so that, signing out and deleting the account are refused while the phone is in a shared event. Outside one, an existing Google or Apple account is signed in to instead.
+- Email accounts are sent a link to confirm the address; the screen offers to send it again. Forgotten passwords are reset by email. An account can be deleted from the screen (Apple requires this of any app with accounts).
+- The account holds nothing yet. Credits and saved price lists will be stored against it.
+
+Not yet checked (accounts):
+
+- Only the signed-out screen has been seen, in a browser. No account has been made against a real Firebase project, and Google and Apple sign-in have not run on a device. They need the providers switched on in Firebase, the Google OAuth client ids (see `.env.example`) as EAS environment variables, and a new build: `usesAppleSignIn` and the Google sign-in module change the native app.
+- Email confirmation and password reset emails use Firebase's default templates and sender.
+
 Still to do:
 
-1. Accounts: real sign-in, upgrading the anonymous user.
-2. Purchases: event packs, validated server-side; creating a shared event uses a credit.
-3. Paid features: history kept in the cloud, and saved named price lists.
+1. Purchases: event packs, validated server-side; creating a shared event uses a credit.
+2. Paid features: history kept in the cloud, and saved named price lists.
 
 ## Phase 3: nice to have
 
