@@ -1,12 +1,13 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Modal, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { GiftAidPrompt } from '@/components/gift-aid';
-import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
+import { Body, Button, Card, Field, Heading, Label, s, useTheme } from '@/components/ui';
 import { groupByCategory, tileColours } from '@/lib/categories';
+import { donationIn, isOpenDonation, offersGiftAid, roundUpBy } from '@/lib/giftaid';
 import { saleFeedback, tapFeedback } from '@/lib/haptics';
-import { CASH_BUTTONS, cashLabel, formatPence } from '@/lib/money';
+import { CASH_BUTTONS, cashLabel, formatPence, parsePounds } from '@/lib/money';
 import { useStore } from '@/lib/store';
 import { openSumup, sumupAvailable } from '@/lib/sumup-open';
 import { soldOnTill } from '@/lib/tills';
@@ -35,6 +36,7 @@ export default function Till() {
   const viaSumup = cardMode === 'sumup' && sumupAvailable;
   // What this till sells. Anything it has run out of is tucked away below the rest.
   const tillName = session?.tillName ?? '';
+  const giftAidOver = session?.giftAidOver;
   const mine = useMemo(() => items.filter((i) => soldOnTill(i, tillName)), [items, tillName]);
   const inStock = useMemo(() => mine.filter((i) => !outOfStock.includes(i.id)), [mine, outOfStock]);
   const soldOut = mine.filter((i) => outOfStock.includes(i.id));
@@ -66,24 +68,47 @@ export default function Till() {
   const [cart, setCart] = useState<Record<string, number>>({});
   const [tendered, setTendered] = useState(0);
   const [lastMessage, setLastMessage] = useState<string | null>(null);
-  // A sale with a donation in it, whose donor is being asked about Gift Aid.
+  // What is being given on each donation that has no set amount (pence), by item id.
+  const [amounts, setAmounts] = useState<Record<string, number>>({});
+  // The donation whose amount is being typed in.
+  const [donationFor, setDonationFor] = useState<Item | null>(null);
+  // The last sale, if it held a donation large enough to offer Gift Aid on. The offer is
+  // a button beside the "Saved" message, so the next customer can be served without answering it.
+  const [offered, setGiftAidOffer] = useState<Sale | null>(null);
+  // Checked against the setting as it is now: an organiser may have turned declarations
+  // off, or raised the amount, since the sale was taken.
+  const giftAidOffer = offered && offersGiftAid(offered, giftAidOver) ? offered : null;
+  // A sale whose donor is filling in a Gift Aid declaration.
   const [giftAidFor, setGiftAidFor] = useState<Sale | null>(null);
 
   const lines: SaleLine[] = useMemo(
-    () =>
-      Object.entries(cart).flatMap(([itemId, qty]) => {
+    () => [
+      ...Object.entries(cart).flatMap(([itemId, qty]) => {
         const it = inStock.find((i) => i.id === itemId);
-        return it && qty > 0 ? [{ itemId, name: it.name, price: it.price, qty, ...(it.donation ? { donation: true } : {}) }] : [];
+        return it && !isOpenDonation(it) && qty > 0 ? [{ itemId, name: it.name, price: it.price, qty, ...(it.donation ? { donation: true } : {}) }] : [];
       }),
-    [cart, inStock],
+      ...Object.entries(amounts).flatMap(([itemId, amount]) => {
+        const it = inStock.find((i) => i.id === itemId);
+        return it && isOpenDonation(it) && amount > 0 ? [{ itemId, name: it.name, price: amount, qty: 1, donation: true }] : [];
+      }),
+    ],
+    [cart, amounts, inStock],
   );
   const total = lines.reduce((sum, l) => sum + l.price * l.qty, 0);
   const count = lines.reduce((n, l) => n + l.qty, 0);
   const change = tendered - total;
 
+  /** Sets what is being given on a donation with no set amount. 0 takes it out of the sale. */
+  const setAmount = (id: string, pence: number) => {
+    tapFeedback();
+    setLastMessage(null);
+    setGiftAidOffer(null);
+    setAmounts(({ [id]: _old, ...rest }) => (pence > 0 ? { ...rest, [id]: pence } : rest));
+  };
   const add = (id: string, d: number) => {
     tapFeedback();
     setLastMessage(null);
+    setGiftAidOffer(null);
     setCart((c) => {
       const q = (c[id] ?? 0) + d;
       const next = { ...c };
@@ -94,13 +119,18 @@ export default function Till() {
   };
   const clear = () => {
     setCart({});
+    setAmounts({});
     setTendered(0);
   };
   // Holding a tile marks the item as run out, or brings it back.
   const setStock = (it: Item, out: boolean) => {
     saleFeedback();
     setOutOfStock(it.id, out);
-    if (out) setCart(({ [it.id]: _gone, ...rest }) => rest);
+    if (out) {
+      setCart(({ [it.id]: _gone, ...rest }) => rest);
+      setAmounts(({ [it.id]: _gone, ...rest }) => rest);
+    }
+    setGiftAidOffer(null);
     setLastMessage(out ? `${it.name} is out of stock, so it’s hidden.` : `${it.name} is back in stock.`);
   };
   // A SumUp payment has finished: on success the sale is already recorded, so clear the
@@ -114,11 +144,12 @@ export default function Till() {
     if (sale) {
       saleFeedback();
       setCart({});
+      setAmounts({});
       setTendered(0);
-      if (sale.lines.some((l) => l.donation)) setGiftAidFor(sale);
+      setGiftAidOffer(offersGiftAid(sale, giftAidOver) ? sale : null);
     }
     clearCardResult();
-  }, [cardResult, sales, clearCardResult]);
+  }, [cardResult, sales, clearCardResult, giftAidOver]);
 
   const payBySumup = async () => {
     const pending = beginCardPayment(lines);
@@ -141,26 +172,41 @@ export default function Till() {
     saleFeedback();
     setLastMessage(method === 'cash' ? `Saved. Give ${formatPence(change)} change.` : `Card sale saved: ${formatPence(total)}.`);
     clear();
-    // The sale is saved first, so asking about Gift Aid never holds up the money.
-    if (lines.some((l) => l.donation)) setGiftAidFor(sale);
+    // Gift Aid is only offered, never asked: the volunteer can serve the next customer instead.
+    setGiftAidOffer(offersGiftAid(sale, giftAidOver) ? sale : null);
   };
   const giftAidDone = (message: string | null) => {
     if (message) {
       saleFeedback();
       setLastMessage(message);
+      setGiftAidOffer(null);
     }
     setGiftAidFor(null);
   };
+  const offerAmount = giftAidOffer ? donationIn(giftAidOffer) : 0;
   const giftAidPrompt = (
     <>
       <GiftAidPrompt sale={giftAidFor} onDone={giftAidDone} />
+      <DonationPrompt
+        item={donationFor}
+        current={donationFor ? (amounts[donationFor.id] ?? 0) : 0}
+        // Rounding up is worked out on the rest of the sale, without this donation.
+        rest={donationFor ? total - (amounts[donationFor.id] ?? 0) : 0}
+        onDone={(pence) => {
+          if (donationFor && pence !== null) setAmount(donationFor.id, pence);
+          setDonationFor(null);
+        }}
+      />
       <PendingCardPrompt />
     </>
   );
 
   const tile = (it: Item) => {
         const out = outOfStock.includes(it.id);
-        const qty = out ? 0 : (cart[it.id] ?? 0);
+        // A donation with no set amount: tapping it asks how much, instead of adding one.
+        const open = isOpenDonation(it);
+        const amount = out || !open ? 0 : (amounts[it.id] ?? 0);
+        const qty = out || open ? 0 : (cart[it.id] ?? 0);
         return (
           // The tile is a plain View holding two sibling buttons (add, and one less),
           // so screen readers see both rather than one nested inside the other.
@@ -181,10 +227,16 @@ export default function Till() {
             }}
           >
             <Pressable
-              onPress={() => (out ? setLastMessage(`${it.name} is out of stock. Hold it to bring it back.`) : add(it.id, 1))}
+              onPress={() => (out ? setLastMessage(`${it.name} is out of stock. Hold it to bring it back.`) : open ? setDonationFor(it) : add(it.id, 1))}
               onLongPress={() => setStock(it, !out)}
               accessibilityRole="button"
-              accessibilityLabel={out ? `${it.name}, out of stock` : `Add ${it.name}, ${formatPence(it.price)}${qty ? `, ${qty} in this sale` : ''}`}
+              accessibilityLabel={
+                out
+                  ? `${it.name}, out of stock`
+                  : open
+                    ? `${it.name}, ${amount ? `${formatPence(amount)} in this sale. Change the amount` : 'any amount. Enter the amount'}`
+                    : `Add ${it.name}, ${formatPence(it.price)}${qty ? `, ${qty} in this sale` : ''}`
+              }
               accessibilityHint={out ? 'Hold to bring back into stock' : 'Hold to mark as out of stock'}
               accessibilityActions={[{ name: 'longpress', label: out ? 'Bring back into stock' : 'Mark as out of stock' }]}
               onAccessibilityAction={(e) => {
@@ -204,16 +256,18 @@ export default function Till() {
               </Text>
               {out ? (
                 <Text style={{ color: t.muted, fontSize: 14, lineHeight: 28, fontWeight: '700' }}>Out of stock</Text>
+              ) : open && !amount ? (
+                <Text style={{ color: t.muted, fontSize: compact ? 15 : 16, lineHeight: 28, fontWeight: '700' }}>Any amount</Text>
               ) : (
-                <Text style={[s.num, { color: t.ink, fontSize: compact ? 18 : 20, lineHeight: 28, fontWeight: '800' }]}>{formatPence(it.price)}</Text>
+                <Text style={[s.num, { color: t.ink, fontSize: compact ? 18 : 20, lineHeight: 28, fontWeight: '800' }]}>{formatPence(open ? amount : it.price)}</Text>
               )}
             </Pressable>
-            {qty > 0 && (
+            {(qty > 0 || amount > 0) && (
               <View style={{ position: 'absolute', right: compact ? 6 : 10, bottom: compact ? 4 : 10, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
                 <Pressable
-                  onPress={() => add(it.id, -1)}
+                  onPress={() => (open ? setAmount(it.id, 0) : add(it.id, -1))}
                   accessibilityRole="button"
-                  accessibilityLabel={`One less ${it.name}`}
+                  accessibilityLabel={open ? `Remove ${it.name}` : `One less ${it.name}`}
                   hitSlop={8}
                   style={({ pressed }) => ({
                     width: 30,
@@ -228,9 +282,11 @@ export default function Till() {
                 >
                   <Text style={{ color: t.ink, fontSize: 18, lineHeight: 20, fontWeight: '700' }}>−</Text>
                 </Pressable>
-                <View style={{ backgroundColor: t.accent, borderRadius: 999, minWidth: 28, height: 28, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' }}>
-                  <Text style={[s.num, { color: t.accentInk, fontWeight: '800' }]}>{qty}</Text>
-                </View>
+                {qty > 0 && (
+                  <View style={{ backgroundColor: t.accent, borderRadius: 999, minWidth: 28, height: 28, paddingHorizontal: 8, alignItems: 'center', justifyContent: 'center' }}>
+                    <Text style={[s.num, { color: t.accentInk, fontWeight: '800' }]}>{qty}</Text>
+                  </View>
+                )}
               </View>
             )}
           </View>
@@ -291,15 +347,25 @@ export default function Till() {
 
   const saleLines =
     lines.length === 0 ? (
-      <Body muted>{lastMessage ?? 'Tap items to add them.'}</Body>
+      <>
+        <Body muted>{lastMessage ?? 'Tap items to add them.'}</Body>
+        {giftAidOffer && <Button title={`Add Gift Aid to the ${formatPence(offerAmount)} donation`} onPress={() => setGiftAidFor(giftAidOffer)} />}
+      </>
     ) : (
       lines.map((l) => (
         // Narrow phones: the name gets its own row so it isn't cut down to a few letters.
         <View key={l.itemId} style={{ flexDirection: 'row', flexWrap: narrow ? 'wrap' : 'nowrap', alignItems: 'center', justifyContent: 'flex-end', gap: 8, rowGap: 4 }}>
           <Text numberOfLines={narrow ? 2 : 1} style={{ flexGrow: 1, flexShrink: 1, flexBasis: narrow ? '100%' : 0, color: t.ink, fontSize: 16 }}>{l.name}</Text>
-          <Stepper label="One less" sign="−" onPress={() => add(l.itemId, -1)} />
-          <Text style={[s.num, { color: t.ink, minWidth: 22, textAlign: 'center', fontWeight: '700' }]}>{l.qty}</Text>
-          <Stepper label="One more" sign="+" onPress={() => add(l.itemId, 1)} />
+          {l.itemId in amounts ? (
+            // A donation of a typed-in amount: there is one of it, so it can only be taken out.
+            <Stepper label={`Remove ${l.name}`} sign="−" onPress={() => setAmount(l.itemId, 0)} />
+          ) : (
+            <>
+              <Stepper label="One less" sign="−" onPress={() => add(l.itemId, -1)} />
+              <Text style={[s.num, { color: t.ink, minWidth: 22, textAlign: 'center', fontWeight: '700' }]}>{l.qty}</Text>
+              <Stepper label="One more" sign="+" onPress={() => add(l.itemId, 1)} />
+            </>
+          )}
           <Text style={[s.num, { color: t.ink, minWidth: 64, textAlign: 'right' }]}>{formatPence(l.price * l.qty)}</Text>
         </View>
       ))
@@ -427,6 +493,16 @@ export default function Till() {
             {lines.length > 0 ? `${count} ${count === 1 ? 'item' : 'items'} in this sale` : (lastMessage ?? 'Tap items to add them.')}
           </Text>
           {clearLink}
+          {lines.length === 0 && giftAidOffer && (
+            <Pressable
+              onPress={() => setGiftAidFor(giftAidOffer)}
+              accessibilityRole="button"
+              accessibilityLabel={`Add Gift Aid to the ${formatPence(offerAmount)} donation`}
+              hitSlop={10}
+            >
+              <Text style={{ color: t.accent, fontWeight: '700' }}>Add Gift Aid</Text>
+            </Pressable>
+          )}
         </View>
         {checkout}
       </View>
@@ -480,6 +556,61 @@ function PendingCardPrompt() {
         )}
       </View>
     </Modal>
+  );
+}
+
+const QUICK_DONATIONS = [100, 200, 500, 1000, 2000];
+
+/**
+ * Asks how much is being given on a donation with no set amount: a quick amount, a typed
+ * one, or whatever rounds the rest of the sale up to the next pound. `onDone` is given the
+ * amount in pence, 0 to take the donation out of the sale, or null if nothing was chosen.
+ */
+function DonationPrompt({ item, current, rest, onDone }: { item: Item | null; current: number; rest: number; onDone: (pence: number | null) => void }) {
+  return (
+    <Modal visible={item !== null} transparent animationType="fade" onRequestClose={() => onDone(null)}>
+      {/* Remounted each time, so the last amount typed isn't left in the box. */}
+      {item && <DonationBody key={`${item.id}:${current}`} item={item} current={current} rest={rest} onDone={onDone} />}
+    </Modal>
+  );
+}
+
+function DonationBody({ item, current, rest, onDone }: { item: Item; current: number; rest: number; onDone: (pence: number | null) => void }) {
+  const [text, setText] = useState(current ? (current / 100).toFixed(2) : '');
+  const typed = parsePounds(text);
+  const roundUp = rest > 0 ? roundUpBy(rest) : 0;
+  return (
+    <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'center' }}>
+      <ScrollView contentContainerStyle={{ padding: 16, flexGrow: 1, justifyContent: 'center' }} keyboardShouldPersistTaps="handled">
+        <Card style={{ maxWidth: 520, width: '100%', alignSelf: 'center' }}>
+          <Heading>{item.name}</Heading>
+          <Body muted>How much is being given?</Body>
+          {roundUp > 0 && (
+            <Button title={`Round up to ${formatPence(rest + roundUp)} (adds ${cashLabel(roundUp)})`} kind="primary" onPress={() => onDone(roundUp)} />
+          )}
+          <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6 }}>
+            {QUICK_DONATIONS.map((p) => (
+              <CashKey key={p} label={cashLabel(p)} onPress={() => onDone(p)} />
+            ))}
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            <Field
+              value={text}
+              onChangeText={setText}
+              placeholder="Other amount, e.g. 3.50"
+              keyboardType="decimal-pad"
+              accessibilityLabel="Donation in pounds"
+              style={{ flex: 1, minWidth: 0 }}
+            />
+            <Button title="Add" disabled={!typed} onPress={() => onDone(typed)} style={{ minWidth: 88 }} />
+          </View>
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <Button title="Cancel" onPress={() => onDone(null)} style={{ flex: 1 }} />
+            {current > 0 && <Button title="Remove donation" kind="danger" onPress={() => onDone(0)} style={{ flex: 1 }} />}
+          </View>
+        </Card>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 

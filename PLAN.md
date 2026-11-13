@@ -115,6 +115,20 @@ Not yet checked (SumUp):
 
 Nothing is left to build in this phase.
 
+Gift Aid rework (donations made a kind of item, declarations off by default):
+
+- A price-list item is either something sold or a donation ("Add a donation"). A donation with its amount left empty asks the till how much is being given, with quick amounts and "Round up to the next pound".
+- Declarations are an event setting on the Event tab, off by default, with an amount donations must be over (£30 to start with). It is stored on the event as `giftAidOver` and sent through the outbox; the existing rules already let organisers write it, so nothing needs deploying.
+- The till no longer opens a pop-up. After a donation over the amount it shows an "Add Gift Aid" button beside the "Saved" message, which goes when the next sale starts. Day total still has "Add Gift Aid" on each donation sale while the setting is on.
+- Day total's card is now "Donations", with donations of £30 or less that have no declaration totalled separately for the Gift Aid Small Donations Scheme.
+
+Not yet checked (Gift Aid rework):
+
+- Checked in a browser on a this-phone-only event at phone width. Not run on a device, on the tablet layout, or in a shared event (the setting reaching other tills is covered by the automated tests against the fake server only).
+- Phones on an older build ignore the setting and still open the old pop-up, and show a donation with no amount as a £0.00 item.
+- Whether the charity can use the Small Donations Scheme, and the wording about it, is for the treasurer to confirm.
+- Past events and the end-of-day summary don't yet show the small-donations figure.
+
 ## Cost notes
 
 - Each sale is one Firestore write. Each till listening to the sales collection reads every sale once, then only changes.

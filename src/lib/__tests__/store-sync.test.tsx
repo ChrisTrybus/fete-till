@@ -83,7 +83,7 @@ const pushedOps = () => cloud.pushOp.mock.calls.map(([, op]) => op);
 const opKey = (op: OutboxOp) => (op.kind === 'sale' ? `sale:${op.sale.id}` : op.kind === 'void' ? `void:${op.saleId}` : op.kind);
 
 let onRemoteSales: (sales: Sale[]) => void;
-let onRemoteEvent: (e: { name: string; items: Item[]; closedAt?: number | null }) => void;
+let onRemoteEvent: (e: { name: string; items: Item[]; closedAt?: number | null; giftAidOver?: number | null }) => void;
 let onRemoteMembers: (members: Member[]) => void;
 let onRemoteGiftAid: ((list: GiftAidDeclaration[]) => void) | undefined;
 let onGiftAidError: ((e: Error) => void) | undefined;
@@ -95,7 +95,7 @@ beforeEach(async () => {
   await AsyncStorage.clear();
   goOnline();
   cloud.createEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', organiserCode: 'QRSTUVWX' });
-  cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 0 });
+  cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 0, giftAidOver: null });
   cloud.claimOrganiser.mockResolvedValue(undefined);
   cloud.saleExists.mockResolvedValue(false);
   cloud.watchGiftAid.mockImplementation((_id, onDeclarations, onError) => {
@@ -747,6 +747,86 @@ describe('closing the event', () => {
   });
 });
 
+describe('the Gift Aid setting', () => {
+  const refusal = () => Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
+  const fete = { name: 'Summer Fete', items: [] as Item[] };
+
+  test('declarations are off until an organiser turns them on, which is sent to the other tills', async () => {
+    await launchInCloudEvent();
+    expect(store.session?.giftAidOver ?? null).toBeNull();
+
+    await act(async () => store.setGiftAidOver(3000));
+    await settle();
+
+    expect(store.session?.giftAidOver).toBe(3000);
+    expect(pushedOps().at(-1)).toEqual({ kind: 'giftAidSetting', over: 3000 });
+    expect(store.outbox).toHaveLength(0);
+
+    await act(async () => store.setGiftAidOver(null));
+    await settle();
+
+    expect(store.session?.giftAidOver).toBeNull();
+    expect(pushedOps().at(-1)).toEqual({ kind: 'giftAidSetting', over: null });
+  });
+
+  test('a till hears the organiser’s setting, and an event that never set one has it off', async () => {
+    await launchInCloudEvent();
+
+    await act(async () => onRemoteEvent({ ...fete, giftAidOver: 2000 }));
+    expect(store.session?.giftAidOver).toBe(2000);
+
+    await act(async () => onRemoteEvent(fete));
+    expect(store.session?.giftAidOver).toBeNull();
+  });
+
+  test('a setting waiting to send is not undone by what the server still says', async () => {
+    await launchInCloudEvent();
+    goOffline();
+    await act(async () => store.setGiftAidOver(0));
+    await act(async () => store.setGiftAidOver(1000));
+    await settle();
+
+    await act(async () => onRemoteEvent(fete));
+
+    expect(store.session?.giftAidOver).toBe(1000);
+    expect(store.outbox).toEqual([{ kind: 'giftAidSetting', over: 1000 }]);
+  });
+
+  test('a setting the event refuses is set aside, and discarding it goes back to what the other tills have', async () => {
+    await launch();
+    await act(() => store.joinCloudEvent('ABC234', 'Tombola'));
+    await settle();
+    await act(async () => onRemoteEvent(fete));
+    cloud.pushOp.mockImplementation(async (_id, op) => {
+      if (op.kind === 'giftAidSetting') throw refusal();
+    });
+
+    await act(async () => store.setGiftAidOver(3000));
+    await settle();
+
+    expect(store.parked.map((p) => opKey(p.op))).toEqual(['giftAidSetting']);
+    expect(store.parked[0].reason).toMatch(/only the organiser/i);
+
+    await act(async () => store.discardParked(store.parked[0].id));
+
+    expect(store.parked).toHaveLength(0);
+    expect(store.session?.giftAidOver).toBeNull();
+  });
+
+  test('a this-phone-only event keeps the setting across a restart', async () => {
+    const firstRun = await launch();
+    await act(async () => store.startLocalEvent('Village Fair', 'Till 1'));
+    await act(async () => store.setGiftAidOver(3000));
+    await settle();
+    await firstRun.unmount();
+
+    await launch();
+
+    expect(store.session?.giftAidOver).toBe(3000);
+    expect(cloud.pushOp).not.toHaveBeenCalled();
+  });
+});
+
 describe('tills and stock', () => {
   test('an item’s tills are sent with the price list', async () => {
     await launchInCloudEvent();
@@ -818,7 +898,7 @@ describe('tills and stock', () => {
 
   test('a phone that rejoins an event gets its float back and tells the other tills again', async () => {
     await launch();
-    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 1500 });
+    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 1500, giftAidOver: null });
 
     await act(() => store.joinCloudEvent('ABC234', 'Tombola'));
     await settle();
@@ -941,7 +1021,7 @@ describe('the price list for the next event', () => {
   });
 
   test('a list from an event this phone only joined is not offered', async () => {
-    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [CAKE], float: 0 });
+    cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [CAKE], float: 0, giftAidOver: null });
     await launch();
     await act(() => store.joinCloudEvent('ABC234', 'Cake stall'));
     await act(() => store.leaveEvent());
