@@ -9,16 +9,13 @@ import * as AppleAuthentication from 'expo-apple-authentication';
 import * as Crypto from 'expo-crypto';
 import {
   GoogleAuthProvider,
-  linkWithCredential,
   OAuthProvider,
   signInWithCredential,
   updateProfile,
   type Auth,
   type AuthCredential,
-  type User,
 } from 'firebase/auth';
 import { Platform } from 'react-native';
-import { CredentialInUse } from './account-errors';
 
 export type Provider = 'google' | 'apple';
 
@@ -89,29 +86,13 @@ async function credentialFor(provider: Provider): Promise<{ credential: AuthCred
   return { credential: new OAuthProvider('apple.com').credential({ idToken: apple.identityToken, rawNonce }), name };
 }
 
-/**
- * Signs in with Google or Apple. With `guest`, the account is added to that guest
- * sign-in, so this phone keeps its user id. Resolves false if the person cancelled.
- * Throws CredentialInUse if the account already belongs to another Cash Tin user.
- */
-export async function connectProvider(auth: Auth, provider: Provider, guest: User | null): Promise<boolean> {
+/** Signs in with Google or Apple, making the account if it is new. Resolves false if the person cancelled. */
+export async function connectProvider(auth: Auth, provider: Provider): Promise<boolean> {
   const got = await credentialFor(provider);
   if (!got) return false;
-  try {
-    const result = guest ? await linkWithCredential(guest, got.credential) : await signInWithCredential(auth, got.credential);
-    if (got.name && !result.user.displayName) await updateProfile(result.user, { displayName: got.name }).catch(() => {});
-    return true;
-  } catch (e) {
-    if ((e as { code?: string }).code === 'auth/credential-already-in-use') {
-      const fromError =
-        provider === 'google'
-          ? GoogleAuthProvider.credentialFromError(e as never)
-          : OAuthProvider.credentialFromError(e as never);
-      // Apple's token can't be used twice, so prefer the one Firebase hands back.
-      throw new CredentialInUse(fromError ?? (provider === 'google' ? got.credential : null));
-    }
-    throw e;
-  }
+  const result = await signInWithCredential(auth, got.credential);
+  if (got.name && !result.user.displayName) await updateProfile(result.user, { displayName: got.name }).catch(() => {});
+  return true;
 }
 
 /** Forgets the Google account chosen, so the next sign-in asks which one to use. */

@@ -78,7 +78,7 @@ src/app/                 screens (Expo Router)
 src/lib/store.tsx        app state, local storage and the sync outbox
 src/lib/cloud.ts         Firestore reads and writes
 src/lib/firebase.ts      Firebase setup and anonymous sign-in
-src/lib/account.ts       accounts: email, Google and Apple sign-in, linked to the anonymous user
+src/lib/account.ts       accounts: email, Google and Apple sign-in, kept apart from events
 src/lib/totals.ts        day-total maths and CSV
 src/lib/money.ts         pence formatting and price-list parsing
 src/lib/haptics.ts       touch feedback on the till

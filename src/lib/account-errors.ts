@@ -1,18 +1,5 @@
 // What went wrong with a sign-in, in words a volunteer can act on. Kept apart from
 // account.ts so it can be tested without Firebase or the native sign-in modules.
-import type { AuthCredential } from 'firebase/auth';
-
-/**
- * Thrown by a sign-in provider when the Google or Apple account is already a Cash Tin
- * account, so it can't be added to this phone's guest sign-in. `credential` signs in
- * to that account instead, or is null if the provider didn't give one back.
- */
-export class CredentialInUse extends Error {
-  constructor(public credential: AuthCredential | null) {
-    super('credential-already-in-use');
-    this.name = 'CredentialInUse';
-  }
-}
 
 /** Something the volunteer has to sort out before trying again; `message` says what. */
 export class AccountError extends Error {

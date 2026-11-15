@@ -30,7 +30,6 @@ export default function AccountScreen() {
   const t = useTheme();
   const store = useStore();
   const { ready, account } = useAccount();
-  const ctx = { inSharedEvent: store.session?.mode === 'cloud' };
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -70,9 +69,9 @@ export default function AccountScreen() {
           ) : !ready ? (
             <ActivityIndicator color={t.accent} />
           ) : account ? (
-            <SignedIn account={account} busy={busy} run={run} inSharedEvent={ctx.inSharedEvent} />
+            <SignedIn account={account} busy={busy} run={run} />
           ) : (
-            <SignedOut busy={busy} run={run} inSharedEvent={ctx.inSharedEvent} />
+            <SignedOut busy={busy} run={run} />
           )}
 
           {notice && <Text style={{ color: t.accent, fontWeight: '700' }}>{notice}</Text>}
@@ -85,8 +84,7 @@ export default function AccountScreen() {
 
 type Run = (fn: () => Promise<unknown>, done?: string) => Promise<void>;
 
-function SignedOut({ busy, run, inSharedEvent }: { busy: boolean; run: Run; inSharedEvent: boolean }) {
-  const ctx = { inSharedEvent };
+function SignedOut({ busy, run }: { busy: boolean; run: Run }) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [mode, setMode] = useState<'new' | 'existing'>('new');
   const [email, setEmail] = useState('');
@@ -102,8 +100,7 @@ function SignedOut({ busy, run, inSharedEvent }: { busy: boolean; run: Run; inSh
     };
   }, []);
 
-  // In a shared event only a new account can be made: signing in to another would change this phone's id.
-  const existing = mode === 'existing' && !inSharedEvent;
+  const existing = mode === 'existing';
   const canSubmit = !busy && email.trim().length > 3 && password.length >= (existing ? 1 : MIN_PASSWORD);
 
   return (
@@ -113,24 +110,22 @@ function SignedOut({ busy, run, inSharedEvent }: { busy: boolean; run: Run; inSh
           An account keeps your event packs and saved price lists, so you still have them on a new phone or after reinstalling the
           app. You don’t need one to run a till.
         </Body>
-        {providers.includes('apple') && <AppleButton disabled={busy} onPress={() => run(() => signInWithProvider('apple', ctx))} />}
+        {providers.includes('apple') && <AppleButton disabled={busy} onPress={() => run(() => signInWithProvider('apple'))} />}
         {providers.includes('google') && (
-          <Button title="Continue with Google" disabled={busy} onPress={() => run(() => signInWithProvider('google', ctx))} />
+          <Button title="Continue with Google" disabled={busy} onPress={() => run(() => signInWithProvider('google'))} />
         )}
       </Card>
 
       <Card>
         <Label>Email and password</Label>
-        {!inSharedEvent && (
-          <Choice
-            value={mode}
-            onChange={setMode}
-            options={[
-              { value: 'new', title: 'New account' },
-              { value: 'existing', title: 'I have an account' },
-            ]}
-          />
-        )}
+        <Choice
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'new', title: 'New account' },
+            { value: 'existing', title: 'I have an account' },
+          ]}
+        />
         <Field
           value={email}
           onChangeText={setEmail}
@@ -158,7 +153,7 @@ function SignedOut({ busy, run, inSharedEvent }: { busy: boolean; run: Run; inSh
           kind="primary"
           disabled={!canSubmit}
           onPress={() =>
-            existing ? run(() => signInWithEmail(email, password, ctx)) : run(() => createEmailAccount(email, password, ctx))
+            existing ? run(() => signInWithEmail(email, password)) : run(() => createEmailAccount(email, password))
           }
         />
         {existing && (
@@ -168,20 +163,13 @@ function SignedOut({ busy, run, inSharedEvent }: { busy: boolean; run: Run; inSh
             onPress={() => run(() => sendPasswordReset(email), `If there’s an account for ${email.trim()}, we’ve emailed a link to reset its password.`)}
           />
         )}
-        {inSharedEvent && (
-          <Body muted>
-            This phone is in a shared event, so you can make a new account now. To sign in to an account you already have, leave the
-            event first.
-          </Body>
-        )}
       </Card>
     </>
   );
 }
 
-function SignedIn({ account, busy, run, inSharedEvent }: { account: Account; busy: boolean; run: Run; inSharedEvent: boolean }) {
+function SignedIn({ account, busy, run }: { account: Account; busy: boolean; run: Run }) {
   const t = useTheme();
-  const ctx = { inSharedEvent };
   const [confirmDelete, setConfirmDelete] = useState(false);
   const via = account.methods.map((m) => METHOD_LABEL[m]).join(' or ') || 'an account';
 
@@ -211,20 +199,16 @@ function SignedIn({ account, busy, run, inSharedEvent }: { account: Account; bus
       )}
 
       <Card>
-        <Body muted>
-          {inSharedEvent
-            ? 'This phone is in a shared event. Leave it before signing out or deleting your account.'
-            : 'Signing out leaves this phone’s past events where they are.'}
-        </Body>
-        <Button title="Sign out" disabled={busy || inSharedEvent} onPress={() => run(() => signOutAccount(ctx))} />
+        <Body muted>Signing out doesn’t affect any event this phone is in, or its past events.</Body>
+        <Button title="Sign out" disabled={busy} onPress={() => run(signOutAccount)} />
         <Button
           title={confirmDelete ? 'Tap again to delete for good' : 'Delete account'}
           kind="danger"
-          disabled={busy || inSharedEvent}
+          disabled={busy}
           onPress={() => {
             if (!confirmDelete) return setConfirmDelete(true);
             setConfirmDelete(false);
-            run(() => deleteAccount(ctx), 'Your account has been deleted.');
+            run(deleteAccount, 'Your account has been deleted.');
           }}
         />
       </Card>

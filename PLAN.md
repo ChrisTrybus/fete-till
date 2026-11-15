@@ -86,7 +86,7 @@ Not yet checked:
 Done (accounts):
 
 - An Account screen, opened from the start screen and the Event tab when sync is set up. Sign-in is by email and password, Google, or Apple (iOS only, as Apple requires; not offered in a browser). Google needs native code, so it is only offered in a build of the app, never Expo Go; in a browser it uses Firebase's pop-up.
-- Making an account links the new sign-in to the phone's anonymous user, so its user id stays the same and it keeps its place, organiser role and own sales in any event. Signing in to an account that already exists changes the id, so that, signing out and deleting the account are refused while the phone is in a shared event. Outside one, an existing Google or Apple account is signed in to instead.
+- Accounts sign in on a second Firebase app (`getAccountAuth` in `firebase.ts`), apart from events. Events keep using each phone's anonymous user, which holds its membership, organiser role and own sales. So signing in, out, or to another account never changes a phone's place in an event, and two phones signed in to one account are still two tills with their own floats. When credits come, creating a shared event will need the account's id token sent to the server alongside the phone's event user.
 - Email accounts are sent a link to confirm the address; the screen offers to send it again. Forgotten passwords are reset by email. An account can be deleted from the screen (Apple requires this of any app with accounts).
 - The account holds nothing yet. Credits and saved price lists will be stored against it.
 
