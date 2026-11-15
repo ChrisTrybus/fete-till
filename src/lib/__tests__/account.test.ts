@@ -30,6 +30,7 @@ jest.mock('../account-providers', () => ({
   connectProvider: jest.fn(),
   signOutProviders: jest.fn(async () => {}),
 }));
+jest.mock('../store-purchases', () => ({ forgetBuyer: jest.fn(async () => {}) }));
 jest.mock('firebase/auth', () => ({
   onAuthStateChanged: jest.fn(),
   createUserWithEmailAndPassword: jest.fn(),
@@ -140,5 +141,17 @@ describe('error messages', () => {
     expect(accountErrorMessage({ code: 'auth/network-request-failed' })).toMatch('signal');
     expect(accountErrorMessage(new AccountError('Do this.'))).toBe('Do this.');
     expect(accountErrorMessage(new Error('weird'))).toBe('Signing in didn’t work. Try again.');
+  });
+
+  it('shows the Cash Tin server’s own words, unless it fell over', () => {
+    const server = (code: string, message = 'You need an event pack.') => Object.assign(new Error(message), { code });
+    expect(accountErrorMessage(server('functions/failed-precondition'))).toBe('You need an event pack.');
+    expect(accountErrorMessage(server('functions/internal', 'INTERNAL'))).toMatch('server');
+    expect(accountErrorMessage(server('functions/unavailable'))).toMatch('signal');
+  });
+
+  it('says nothing when a purchase is cancelled, and keeps store errors plain', () => {
+    expect(accountErrorMessage({ userCancelled: true, code: '1' })).toBeNull();
+    expect(accountErrorMessage({ userCancelled: false, code: '2', message: 'STORE_PROBLEM' })).toBe('The purchase didn’t go through. Try again.');
   });
 });

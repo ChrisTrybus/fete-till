@@ -95,10 +95,34 @@ Not yet checked (accounts):
 - Only the signed-out screen has been seen, in a browser. No account has been made against a real Firebase project, and Google and Apple sign-in have not run on a device. They need the providers switched on in Firebase, the Google OAuth client ids (see `.env.example`) as EAS environment variables, and a new build: `usesAppleSignIn` and the Google sign-in module change the native app.
 - Email confirmation and password reset emails use Firebase's default templates and sender.
 
+Done (event packs):
+
+- Shared events are now started by a Cloud Function, `startSharedEvent` (`functions/src/index.ts`), not by the phone. The rules no longer let a device create an event, a join code or an organiser code. The function makes all of them in one transaction, and the phone that asked becomes the organiser and first till, as before.
+- The phone picks the event id, so if the reply is lost and the phone tries again, it gets the same event back and no second credit is spent.
+- Event packs are bought through RevenueCat (`react-native-purchases`), with the account's uid as RevenueCat's app user id. The packs are 1 event (`cashtin_event_1`, 99p) and 5 events (`cashtin_event_5`, £2.99), both consumables.
+- After a purchase the app calls `syncPurchases`. That function asks RevenueCat's REST API what the account has bought and adds any pack not yet counted. Each purchase is recorded under `accounts/{uid}/purchases/{RevenueCat transaction id}`, so none is counted twice. The app never sets the count itself, and the rules let an account only read its own.
+- Spending: with `REQUIRE_CREDITS` on, `startSharedEvent` needs the account's id token (sent with the phone's anonymous call) and at least one credit. It takes one credit in the same transaction and records it under `accounts/{uid}/spent/{eventId}`. The event records the paying account (`account`, `paid`), and organisers can't change either.
+- `REQUIRE_CREDITS` is off by default, so shared events stay free until packs are on sale.
+- Test purchases only count while `ALLOW_SANDBOX_PURCHASES` is on.
+- The Account screen has an "Event packs" card showing events left, the two packs at the store's prices, and "Check for purchases". Opening the screen also checks quietly, so a purchase made with no signal is counted later.
+- In a browser the card says to buy in the phone app. Deleting the account warns that its credits go with it.
+- On the start screen, "Several tills" says whether it will use a credit, once the app sells packs. If the server refuses for lack of a sign-in or a credit, a button goes to the Account screen.
+- Tests:
+  - Unit tests cover which purchases count (`functions/src/__tests__`), buying and counting on the phone, and starting an event, including the retry and the refusals.
+  - Rules tests now check that devices can't create events, codes, organiser codes or credits, and that an account can read only its own (49 rules tests).
+
+Not yet checked (event packs):
+
+- Nothing has run against a real Firebase project, RevenueCat or a store. The functions haven't been deployed or run in the emulator, and the Firestore transactions in `functions/src/index.ts` are only typechecked.
+- The project must move to the Blaze plan. Then deploy the rules and the functions together: once the new rules are live, a phone can only start a shared event through the function, so a build from before this change can no longer start one.
+- RevenueCat's v1 `GET /subscribers` response is read as `subscriber.non_subscriptions[product][]` with `id` and `is_sandbox`. Check this against a real sandbox purchase.
+- A refunded pack isn't taken back. RevenueCat can report refunds by webhook if that's needed.
+- Deleting an account leaves its `accounts/{uid}` record on the server. Nothing can read it, but it should be cleaned up, for example by a function triggered on user deletion.
+- The prices shown come from the store. The 99p and £2.99 fallbacks only appear when the store can't be reached.
+
 Still to do:
 
-1. Purchases: event packs, validated server-side; creating a shared event uses a credit.
-2. Paid features: history kept in the cloud, and saved named price lists.
+1. Paid features: history kept in the cloud, and saved named price lists. The account's `unlocked` flag is set once any pack has been bought, ready for saved lists.
 
 ## Phase 3: nice to have
 

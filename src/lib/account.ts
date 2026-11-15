@@ -21,6 +21,7 @@ import { useSyncExternalStore } from 'react';
 import { AccountError } from './account-errors';
 import { availableProviders, connectProvider, signOutProviders, type Provider } from './account-providers';
 import { cloudEnabled, getAccountAuth } from './firebase';
+import { forgetBuyer } from './store-purchases';
 
 export { availableProviders, type Provider };
 
@@ -149,6 +150,7 @@ export async function reloadAccount() {
 export async function signOutAccount() {
   await signOut(auth());
   await signOutProviders();
+  await forgetBuyer();
   refresh();
 }
 
@@ -158,5 +160,6 @@ export async function deleteAccount() {
   if (!u) throw new AccountError('You aren’t signed in.');
   await deleteUser(u);
   await signOutProviders();
+  await forgetBuyer();
   refresh();
 }

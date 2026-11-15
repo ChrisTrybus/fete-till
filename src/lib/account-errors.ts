@@ -50,10 +50,23 @@ const MESSAGES: Record<string, string> = {
   PLAY_SERVICES_NOT_AVAILABLE: 'Google sign-in needs Google Play services on this phone.',
 };
 
-/** A message to show for a failed sign-in, or null if the person cancelled it. */
+/** A message to show for a failed sign-in or purchase, or null if the person cancelled it. */
 export function accountErrorMessage(e: unknown): string | null {
   if (isCancelled(e)) return null;
   if (e instanceof AccountError) return e.message;
   if (e instanceof Error && e.message === 'timeout') return MESSAGES['auth/network-request-failed'];
-  return MESSAGES[codeOf(e)] ?? 'Signing in didn’t work. Try again.';
+  const code = codeOf(e);
+  // Cash Tin's own server: its messages are written to be shown, except when it fell over.
+  if (code.startsWith('functions/')) {
+    if (code === 'functions/unavailable' || code === 'functions/deadline-exceeded') return MESSAGES['auth/network-request-failed'];
+    if (code === 'functions/internal' || code === 'functions/not-found' || !(e as Error).message) {
+      return 'Something went wrong on the Cash Tin server. Try again later.';
+    }
+    return (e as Error).message;
+  }
+  // The App Store or Google Play, through RevenueCat.
+  if (e && typeof e === 'object' && 'userCancelled' in e) {
+    return (e as { userCancelled?: unknown }).userCancelled ? null : 'The purchase didn’t go through. Try again.';
+  }
+  return MESSAGES[code] ?? 'Signing in didn’t work. Try again.';
 }

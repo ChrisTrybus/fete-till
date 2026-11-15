@@ -21,6 +21,7 @@ import {
   type SignInMethod,
 } from '@/lib/account';
 import { accountErrorMessage } from '@/lib/account-errors';
+import { buyPack, packPrices, PACKS, purchasesAvailable, syncPurchases, useCredits, type PackId } from '@/lib/packs';
 import { useStore } from '@/lib/store';
 
 const METHOD_LABEL: Record<SignInMethod, string> = { password: 'email and password', google: 'Google', apple: 'Apple' };
@@ -35,13 +36,14 @@ export default function AccountScreen() {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  async function run(fn: () => Promise<unknown>, done?: string) {
+  async function run(fn: () => Promise<unknown>, done?: string | (() => string | undefined)) {
     setBusy(true);
     setError(null);
     setNotice(null);
     try {
       await fn();
-      if (done) setNotice(done);
+      const message = typeof done === 'function' ? done() : done;
+      if (message) setNotice(message);
     } catch (e) {
       setError(accountErrorMessage(e));
     } finally {
@@ -82,7 +84,80 @@ export default function AccountScreen() {
   );
 }
 
-type Run = (fn: () => Promise<unknown>, done?: string) => Promise<void>;
+type Run = (fn: () => Promise<unknown>, done?: string | (() => string | undefined)) => Promise<void>;
+
+/** The account's event credits, and buying more. */
+function Packs({ uid, busy, run }: { uid: string; busy: boolean; run: Run }) {
+  const t = useTheme();
+  const credits = useCredits(uid);
+  const [prices, setPrices] = useState<Record<PackId, string> | null>(null);
+
+  useEffect(() => {
+    let current = true;
+    packPrices().then((p) => current && setPrices(p));
+    // Count anything bought before that didn't reach the server (no signal at the time).
+    if (purchasesAvailable) syncPurchases().catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [uid]);
+
+  const left = credits?.credits ?? 0;
+  return (
+    <Card>
+      <Label>Event packs</Label>
+      {credits === null ? (
+        <ActivityIndicator color={t.accent} />
+      ) : (
+        <Text style={{ color: t.ink, fontSize: 20, fontWeight: '800' }}>
+          {left === 0 ? 'No events left' : `${left} ${left === 1 ? 'event' : 'events'} left`}
+        </Text>
+      )}
+      <Body muted>Each event with several tills uses one. Events on just this phone are always free.</Body>
+      {purchasesAvailable ? (
+        <>
+          {PACKS.map((p) => (
+            <Button
+              key={p.id}
+              title={`${p.events === 1 ? '1 event' : `${p.events} events`} · ${prices?.[p.id] ?? p.fallbackPrice}`}
+              kind={p.events > 1 ? 'primary' : 'plain'}
+              disabled={busy || !prices}
+              onPress={() => {
+                let outcome: Awaited<ReturnType<typeof buyPack>> = 'cancelled';
+                run(
+                  async () => {
+                    outcome = await buyPack(p.id);
+                  },
+                  () =>
+                    outcome === 'counted'
+                      ? `Added ${p.events === 1 ? '1 event' : `${p.events} events`} to your account.`
+                      : outcome === 'paid'
+                        ? 'Your purchase went through. It will be added when you have signal: tap “Check for purchases”.'
+                        : undefined,
+                );
+              }}
+            />
+          ))}
+          <Button
+            title="Check for purchases"
+            disabled={busy}
+            onPress={() => {
+              let added = 0;
+              run(
+                async () => {
+                  added = (await syncPurchases()).added;
+                },
+                () => (added ? `Added ${added === 1 ? '1 event' : `${added} events`} from earlier purchases.` : 'Everything you’ve bought is already counted.'),
+              );
+            }}
+          />
+        </>
+      ) : (
+        <Body muted>Buy event packs in the Cash Tin app on your phone.</Body>
+      )}
+    </Card>
+  );
+}
 
 function SignedOut({ busy, run }: { busy: boolean; run: Run }) {
   const [providers, setProviders] = useState<Provider[]>([]);
@@ -198,6 +273,8 @@ function SignedIn({ account, busy, run }: { account: Account; busy: boolean; run
         </Card>
       )}
 
+      <Packs uid={account.uid} busy={busy} run={run} />
+
       <Card>
         <Body muted>Signing out doesn’t affect any event this phone is in, or its past events.</Body>
         <Button title="Sign out" disabled={busy} onPress={() => run(signOutAccount)} />
@@ -211,6 +288,7 @@ function SignedIn({ account, busy, run }: { account: Account; busy: boolean; run
             run(deleteAccount, 'Your account has been deleted.');
           }}
         />
+        {confirmDelete && <Body muted>Any event credits left on the account go with it.</Body>}
       </Card>
     </>
   );

@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import * as FirebaseAuth from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getFunctions, type Functions } from 'firebase/functions';
 import { Platform } from 'react-native';
 
 // Values come from the Firebase console (Project settings > Your apps > Web app).
@@ -45,6 +46,22 @@ export function getAccountAuth(): FirebaseAuth.Auth | null {
   if (!cloudEnabled) return null;
   accountAuth ??= authFor(appNamed(ACCOUNT_APP));
   return accountAuth;
+}
+
+// Cloud Functions (functions/). Must match the region in functions/src/index.ts.
+const FUNCTIONS_REGION = 'europe-west2';
+
+/** Functions called as the phone's anonymous event user, such as starting a shared event. */
+export function getEventFunctions(): Functions | null {
+  return cloudEnabled ? getFunctions(appNamed(), FUNCTIONS_REGION) : null;
+}
+
+/** Functions and Firestore used as the signed-in Cash Tin account: credits and purchases. */
+export function getAccountCloud(): { functions: Functions; db: Firestore } | null {
+  if (!cloudEnabled) return null;
+  getAccountAuth(); // the account app's Auth must exist before its Functions and Firestore use it
+  const app = appNamed(ACCOUNT_APP);
+  return { functions: getFunctions(app, FUNCTIONS_REGION), db: getFirestore(app) };
 }
 
 function authFor(app: FirebaseApp): FirebaseAuth.Auth {

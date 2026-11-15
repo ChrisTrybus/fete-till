@@ -1,12 +1,12 @@
 // Firestore layout (see firestore.rules for who can do what):
 //   codes/{CODE}                      { eventId }            join code -> event lookup
-//   events/{eventId}                  { name, code, createdBy, createdAt, items[], closedAt?, giftAidOver? }
+//   events/{eventId}                  { name, code, createdBy, createdAt, items[], closedAt?, giftAidOver?, account?, paid? }
 //   events/{eventId}/members/{uid}    { code, tillName, joinedAt, deviceId?, float? }
 //   events/{eventId}/private/organiser { code }             organiser code; no device can read it
 //   events/{eventId}/organisers/{uid} { code, claimedAt }   devices that have proved they know it
 //   events/{eventId}/sales/{saleId}   Sale + { createdBy }
 //   events/{eventId}/giftAid/{saleId} GiftAidDeclaration + { createdBy }   only organisers can read these
-import { randomUUID } from 'expo-crypto';
+// Events, their codes and organiser codes are made by the server: see functions/src/index.ts.
 import {
   collection,
   doc,
@@ -18,26 +18,11 @@ import {
   type DocumentData,
   type Unsubscribe,
 } from 'firebase/firestore';
-import { ensureSignedIn, getCloud } from './firebase';
+import { httpsCallable } from 'firebase/functions';
+import { ensureSignedIn, getAccountAuth, getCloud, getEventFunctions } from './firebase';
 import type { GiftAidDeclaration, Item, Member, OutboxOp, Sale } from './types';
 
-// No 0/O, 1/I/L so codes are easy to read aloud and type.
-const CODE_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
-
-export const randomCode = (len = 6) =>
-  Array.from({ length: len }, () => CODE_ALPHABET[Math.floor(Math.random() * CODE_ALPHABET.length)]).join('');
-
 export const normaliseCode = (code: string) => code.toUpperCase().replace(/[^A-Z0-9]/g, '');
-
-/** An 8-character code, long enough that it can't be guessed by trying codes one after another. */
-export function randomOrganiserCode() {
-  // Each UUID starts with 8 random hex digits; two of them give 8 random bytes.
-  const hex = randomUUID().slice(0, 8) + randomUUID().slice(0, 8);
-  return Array.from(
-    { length: 8 },
-    (_, i) => CODE_ALPHABET[parseInt(hex.slice(i * 2, i * 2 + 2), 16) % CODE_ALPHABET.length],
-  ).join('');
-}
 
 function db() {
   const c = getCloud();
@@ -49,31 +34,52 @@ function db() {
 const withTimeout = <T,>(p: Promise<T>, ms = 10000) =>
   Promise.race([p, new Promise<never>((_, rej) => setTimeout(() => rej(new Error('timeout')), ms))]);
 
-export async function createEvent(name: string, tillName: string, items: Item[]) {
-  const uid = await ensureSignedIn();
-  const ref = doc(collection(db(), 'events'));
-  await withTimeout(setDoc(ref, { name, code: '', createdBy: uid, createdAt: Date.now(), items }));
+/** Starting a shared event was refused until the organiser signs in, or buys an event pack. */
+export class NeedsPack extends Error {
+  constructor(
+    message: string,
+    readonly reason: 'sign-in' | 'no-credits',
+  ) {
+    super(message);
+    this.name = 'NeedsPack';
+  }
+}
 
-  // Set the organiser code and claim the role, which the rest of the setup needs.
-  const organiserCode = randomOrganiserCode();
-  await withTimeout(setDoc(doc(ref, 'private', 'organiser'), { code: organiserCode }));
-  await claimOrganiser(ref.id, organiserCode);
+type Started = { eventId: string; code: string; organiserCode: string };
 
-  // Reserve a unique code. Creating an existing code doc counts as an update,
-  // which the rules refuse, so a clash just means "try another".
-  let code = '';
-  for (let attempt = 0; attempt < 5 && !code; attempt++) {
-    const candidate = randomCode();
+/**
+ * Starts a shared event, with this phone as its organiser and first till. The server
+ * makes it (functions/src/index.ts), so that it can spend an event pack credit from
+ * the signed-in account. The event id is picked here, so trying again after a lost
+ * reply returns the same event instead of spending a second credit.
+ */
+export async function createEvent(name: string, tillName: string, items: Item[], deviceId?: string): Promise<Started> {
+  await ensureSignedIn();
+  const functions = getEventFunctions();
+  if (!functions) throw new Error('Cloud sync is not configured');
+  const eventId = doc(collection(db(), 'events')).id;
+  const start = httpsCallable<object, Started>(functions, 'startSharedEvent', { timeout: 20000 });
+
+  for (let attempt = 0; ; attempt++) {
+    // Fetched each time: a token can expire between tries.
+    const accountToken = (await getAccountAuth()?.currentUser?.getIdToken()) ?? null;
     try {
-      await withTimeout(setDoc(doc(db(), 'codes', candidate), { eventId: ref.id }));
-      code = candidate;
+      const { data } = await start({ eventId, name, tillName, items, deviceId: deviceId ?? null, accountToken });
+      return data;
     } catch (e) {
-      if (attempt === 4) throw e;
+      const code = (e as { code?: string }).code ?? '';
+      const reason = ((e as { details?: { reason?: unknown } }).details?.reason ?? null) as string | null;
+      if (code === 'functions/failed-precondition' && (reason === 'sign-in' || reason === 'no-credits')) {
+        throw new NeedsPack((e as Error).message, reason);
+      }
+      if (code === 'functions/invalid-argument') throw new Error((e as Error).message);
+      if (code === 'functions/not-found') {
+        throw new Error('Events with several tills aren’t set up on the server yet. Deploy the Cloud Functions.');
+      }
+      // A lost connection or a slow server: once more with the same id, which is safe.
+      if (attempt >= 1) throw new Error('timeout');
     }
   }
-  await withTimeout(updateDoc(ref, { code }));
-  await joinAsMember(ref.id, code, tillName);
-  return { eventId: ref.id, code, organiserCode };
 }
 
 /** Registers this device as an organiser. The server refuses it unless the code is the event's organiser code. */

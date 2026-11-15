@@ -448,7 +448,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const createCloudEvent = useCallback(
     async (name: string, tillName: string, items: Item[] = STARTER_ITEMS) => {
-      const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, items);
+      const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, items, stateRef.current.deviceId);
       markRegistered(eventId);
       update((s) => ({
         ...s,

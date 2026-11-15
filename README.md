@@ -7,7 +7,7 @@ Built with Expo (React Native, TypeScript) and Firebase (Firestore + anonymous a
 ## How it works
 
 - **Local-first.** Every sale is saved on the phone before anything else, then queued. The queue is sent to Firestore whenever there is signal, so a dead spot in the field never loses a sale.
-- **Events and join codes.** The organiser starts an event and gets a 6-character code. Other volunteers enter the code to join. Nobody needs an account; each device signs in anonymously.
+- **Events and join codes.** The organiser starts an event and gets a 6-character code. Other volunteers enter the code to join. Volunteers never need an account; each device signs in anonymously. Once event packs are switched on, the organiser needs an account with a credit to start an event with several tills.
 - **One shared price list.** Organisers edit it. Changes reach the other tills when they next have signal.
 - **Organisers.** The phone that starts an event gets an organiser code on its Event tab. Only organisers can change the price list or void another till's sales. Entering the code on another phone, or after reinstalling, makes that phone an organiser too.
 - **Closing the event.** An organiser closes the event at the end of the day. Tills stop taking sales, and Day total offers an end-of-day summary to share as text or a PDF.
@@ -30,20 +30,40 @@ Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
 3. **Build > Firestore Database:** create a database (choose `europe-west2` London, or another region near your users).
 4. **Project settings > Your apps:** add a **Web app** and copy its config.
 5. `cp .env.example .env` and paste the values in.
-6. Deploy the security rules:
+6. Shared events are started by a Cloud Function (`functions/`), which needs the **Blaze** (pay-as-you-go) plan. At fete scale it stays inside the free allowance, but Google needs a card on file. Set a budget alert in Google Cloud billing.
+7. Deploy the security rules and functions:
    ```bash
    npm i -g firebase-tools
    firebase login
    firebase use --add        # pick your project
-   firebase deploy --only firestore:rules
+   npm --prefix functions install
+   firebase deploy --only firestore:rules,functions
    ```
-7. Restart with `npx expo start --clear`.
+   The first functions deploy asks for `REVENUECAT_SECRET_KEY` (see Event packs; enter anything until RevenueCat is set up) and the two settings below.
+8. Restart with `npx expo start --clear`.
+
+Without the functions deployed, events on just one phone still work, but "Several tills" can't start an event.
+
+### Event packs
+
+Starting an event with several tills can cost one credit from an event pack (1 event for 99p, 5 for £2.99), bought in the app. Purchases go through RevenueCat, which handles the App Store and Google Play. The server checks every purchase with RevenueCat before adding credits.
+
+1. In App Store Connect and Google Play Console, make two **consumable** in-app products: `cashtin_event_1` and `cashtin_event_5`.
+2. In RevenueCat, make a project with the iOS and Android apps, connect the stores, and add both products, marked as consumables.
+3. Put the public SDK keys in `.env` (`EXPO_PUBLIC_REVENUECAT_IOS_KEY`, `EXPO_PUBLIC_REVENUECAT_ANDROID_KEY`) and as EAS environment variables.
+4. Give the server RevenueCat's secret API key: `firebase functions:secrets:set REVENUECAT_SECRET_KEY`, then deploy the functions again.
+5. Two settings are asked for on deploy and kept in `functions/.env.<project id>`:
+   - `REQUIRE_CREDITS`: whether a shared event needs a credit. Leave `false` until packs are on sale, then set `true` and deploy again.
+   - `ALLOW_SANDBOX_PURCHASES`: count test purchases (TestFlight, Play testing) as real credits. `true` while testing, `false` once the app is live.
+
+Purchases need a development or store build: in Expo Go, RevenueCat runs in a preview mode with no real purchases.
 
 ## Testing
 
 ```bash
 npm test              # money, day totals, and offline sync / app-kill tests
 npm run test:rules    # Firestore security rules, against the local emulator
+npm --prefix functions run typecheck   # the Cloud Functions
 npx expo lint
 npx tsc --noEmit
 ```
@@ -79,6 +99,8 @@ src/lib/store.tsx        app state, local storage and the sync outbox
 src/lib/cloud.ts         Firestore reads and writes
 src/lib/firebase.ts      Firebase setup and anonymous sign-in
 src/lib/account.ts       accounts: email, Google and Apple sign-in, kept apart from events
+src/lib/packs.ts         event pack credits, and buying them (store-purchases.ts: RevenueCat)
+functions/               Cloud Functions: counting purchases, starting shared events
 src/lib/totals.ts        day-total maths and CSV
 src/lib/money.ts         pence formatting and price-list parsing
 src/lib/haptics.ts       touch feedback on the till

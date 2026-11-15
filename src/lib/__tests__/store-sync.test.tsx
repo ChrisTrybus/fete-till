@@ -1016,7 +1016,7 @@ describe('the price list for the next event', () => {
     await act(() => store.leaveEvent());
 
     await act(() => store.createCloudEvent('Winter Fair', 'Cake stall', [CAKE]));
-    expect(cloud.createEvent).toHaveBeenCalledWith('Winter Fair', 'Cake stall', [CAKE]);
+    expect(cloud.createEvent).toHaveBeenCalledWith('Winter Fair', 'Cake stall', [CAKE], expect.any(String));
     expect(store.items).toEqual([CAKE]);
   });
 
