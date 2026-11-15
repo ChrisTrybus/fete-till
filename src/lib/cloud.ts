@@ -7,6 +7,7 @@
 //   events/{eventId}/sales/{saleId}   Sale + { createdBy }
 //   events/{eventId}/giftAid/{saleId} GiftAidDeclaration + { createdBy }   only organisers can read these
 // Events, their codes and organiser codes are made by the server: see functions/src/index.ts.
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   collection,
   doc,
@@ -45,19 +46,44 @@ export class NeedsPack extends Error {
   }
 }
 
-type Started = { eventId: string; code: string; organiserCode: string };
+/** The event as the server made it. Its name and price list are the server's, which may be from an earlier try. */
+type Started = { eventId: string; code: string; organiserCode: string; name?: string; items?: Item[] };
+
+// The id of a shared event this phone has asked the server for but not heard back
+// about. It is kept on the phone until the answer arrives, so that trying again,
+// even after closing the app, asks for the same event: if the server made it the
+// first time, it is returned, rather than a second one made and paid for.
+const PENDING_KEY = 'fete-till:pending-shared-event';
+const PENDING_FOR = 24 * 60 * 60 * 1000;
+
+async function pendingEventId(): Promise<string | null> {
+  try {
+    const p = JSON.parse((await AsyncStorage.getItem(PENDING_KEY)) ?? 'null') as { eventId?: unknown; at?: unknown } | null;
+    if (p && typeof p.eventId === 'string' && typeof p.at === 'number' && Date.now() - p.at < PENDING_FOR) return p.eventId;
+  } catch {
+    // Unreadable: start afresh.
+  }
+  return null;
+}
+
+const forgetPending = () => AsyncStorage.removeItem(PENDING_KEY).catch(() => {});
 
 /**
  * Starts a shared event, with this phone as its organiser and first till. The server
  * makes it (functions/src/index.ts), so that it can spend an event pack credit from
- * the signed-in account. The event id is picked here, so trying again after a lost
- * reply returns the same event instead of spending a second credit.
+ * the signed-in account. The event id is picked here and kept until the server
+ * answers, so trying again after a lost reply returns the same event instead of
+ * spending a second credit.
  */
 export async function createEvent(name: string, tillName: string, items: Item[], deviceId?: string): Promise<Started> {
   await ensureSignedIn();
   const functions = getEventFunctions();
   if (!functions) throw new Error('Cloud sync is not configured');
-  const eventId = doc(collection(db(), 'events')).id;
+  let eventId = await pendingEventId();
+  if (!eventId) {
+    eventId = doc(collection(db(), 'events')).id;
+    await AsyncStorage.setItem(PENDING_KEY, JSON.stringify({ eventId, at: Date.now() }));
+  }
   const start = httpsCallable<object, Started>(functions, 'startSharedEvent', { timeout: 20000 });
 
   for (let attempt = 0; ; attempt++) {
@@ -65,14 +91,20 @@ export async function createEvent(name: string, tillName: string, items: Item[],
     const accountToken = (await getAccountAuth()?.currentUser?.getIdToken()) ?? null;
     try {
       const { data } = await start({ eventId, name, tillName, items, deviceId: deviceId ?? null, accountToken });
+      await forgetPending();
       return data;
     } catch (e) {
       const code = (e as { code?: string }).code ?? '';
       const reason = ((e as { details?: { reason?: unknown } }).details?.reason ?? null) as string | null;
+      // A clear answer that this event wasn't made: the next try can use a new id.
       if (code === 'functions/failed-precondition' && (reason === 'sign-in' || reason === 'no-credits')) {
+        await forgetPending();
         throw new NeedsPack((e as Error).message, reason);
       }
-      if (code === 'functions/invalid-argument') throw new Error((e as Error).message);
+      if (code === 'functions/invalid-argument' || code === 'functions/already-exists') {
+        await forgetPending();
+        throw new Error(code === 'functions/already-exists' ? 'That didn’t work. Try again.' : (e as Error).message);
+      }
       if (code === 'functions/not-found') {
         throw new Error('Events with several tills aren’t set up on the server yet. Deploy the Cloud Functions.');
       }

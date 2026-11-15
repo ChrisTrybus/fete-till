@@ -2,6 +2,7 @@
  * Starting a shared event goes through the server, which may need an event pack.
  * Firebase is replaced with fakes.
  */
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createEvent, NeedsPack } from '../cloud';
 
 const mockServerCall = jest.fn();
@@ -15,16 +16,48 @@ jest.mock('../firebase', () => ({
   getEventFunctions: () => ({}),
   getAccountAuth: () => ({ currentUser: mockSignedInAccount }),
 }));
+jest.mock('@react-native-async-storage/async-storage', () =>
+  require('@react-native-async-storage/async-storage/jest/async-storage-mock'),
+);
 jest.mock('firebase/functions', () => ({ httpsCallable: () => mockServerCall }));
-jest.mock('firebase/firestore', () => ({ collection: jest.fn(), doc: jest.fn(() => ({ id: 'abcdefghijklmnopqrst' })) }));
+let mockNextId = 0;
+jest.mock('firebase/firestore', () => ({
+  collection: jest.fn(),
+  doc: jest.fn(() => ({ id: mockNextId++ === 0 ? 'abcdefghijklmnopqrst' : `id${String(mockNextId).padStart(18, '0')}` })),
+}));
 
 const fail = (code: string, reason?: string) =>
   Object.assign(new Error(`failed: ${code}`), { code, details: reason ? { reason } : undefined });
 const started = { eventId: 'abcdefghijklmnopqrst', code: 'ABC234', organiserCode: 'QRSTUVWX' };
 
-beforeEach(() => {
+beforeEach(async () => {
   mockServerCall.mockReset();
   mockSignedInAccount = accountUser;
+  mockNextId = 0;
+  await AsyncStorage.clear();
+});
+
+const sentId = (call: number) => mockServerCall.mock.calls[call][0].eventId;
+
+it('asks for the same event again after giving up, even after a restart, so a paid event isn’t paid twice', async () => {
+  mockServerCall.mockRejectedValue(fail('functions/deadline-exceeded'));
+  await expect(createEvent('Fete', 'Cakes', [])).rejects.toThrow('timeout');
+  // The organiser taps Start again; the server made the event the first time.
+  mockServerCall.mockResolvedValue({ data: { ...started, name: 'Fete' } });
+  await createEvent('Fete', 'Cakes', []);
+  expect(new Set([0, 1, 2].map(sentId)).size).toBe(1);
+
+  // Once the answer has arrived, the next event is a new one.
+  await createEvent('Next fete', 'Cakes', []);
+  expect(sentId(3)).not.toBe(sentId(2));
+});
+
+it('starts afresh after a clear refusal', async () => {
+  mockServerCall.mockRejectedValueOnce(fail('functions/failed-precondition', 'no-credits'));
+  await expect(createEvent('Fete', 'Cakes', [])).rejects.toBeInstanceOf(NeedsPack);
+  mockServerCall.mockResolvedValue({ data: started });
+  await createEvent('Fete', 'Cakes', []);
+  expect(sentId(1)).not.toBe(sentId(0));
 });
 
 it('sends the event, this phone’s details and the account’s token, and returns the codes', async () => {

@@ -447,12 +447,16 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   );
 
   const createCloudEvent = useCallback(
-    async (name: string, tillName: string, items: Item[] = STARTER_ITEMS) => {
-      const { eventId, code, organiserCode } = await Cloud.createEvent(name, tillName, items, stateRef.current.deviceId);
+    async (name: string, tillName: string, wanted: Item[] = STARTER_ITEMS) => {
+      const started = await Cloud.createEvent(name, tillName, wanted, stateRef.current.deviceId);
+      const { eventId, code, organiserCode } = started;
+      // If an earlier try made the event, it keeps the name and list it was made with.
+      const eventName = started.name || name;
+      const items = Array.isArray(started.items) ? started.items : wanted;
       markRegistered(eventId);
       update((s) => ({
         ...s,
-        session: { eventId, eventName: name, code, tillName, mode: 'cloud', organiserCode, startedAt: Date.now() },
+        session: { eventId, eventName, code, tillName, mode: 'cloud', organiserCode, startedAt: Date.now() },
         items,
         sales: {},
         outbox: [],

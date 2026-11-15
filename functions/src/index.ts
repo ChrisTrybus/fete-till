@@ -116,8 +116,15 @@ export const startSharedEvent = onCall(async (req) => {
     const existing = await tx.get(event);
     if (existing.exists) {
       if (existing.get('createdBy') !== phone) throw new HttpsError('already-exists', 'That event id is taken.');
+      // An earlier try made it (its reply was lost). Return it as it was made.
       const secret = await tx.get(organiserDoc);
-      return { eventId: r.eventId, code: String(existing.get('code')), organiserCode: String(secret.get('code')) };
+      return {
+        eventId: r.eventId,
+        code: String(existing.get('code')),
+        organiserCode: String(secret.get('code')),
+        name: String(existing.get('name')),
+        items: existing.get('items') ?? [],
+      };
     }
 
     const account: DocumentReference | null = requireCredits && payer ? db().doc(`accounts/${payer}`) : null;
@@ -160,6 +167,6 @@ export const startSharedEvent = onCall(async (req) => {
       tx.update(account, { credits: FieldValue.increment(-1), updatedAt: FieldValue.serverTimestamp() });
       tx.create(account.collection('spent').doc(r.eventId), { eventName: r.name, at: now });
     }
-    return { eventId: r.eventId, code, organiserCode };
+    return { eventId: r.eventId, code, organiserCode, name: r.name, items: r.items };
   });
 });
