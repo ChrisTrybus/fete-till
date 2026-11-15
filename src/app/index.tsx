@@ -3,6 +3,9 @@ import { useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Body, Bunting, Button, Card, Choice, Field, Heading, Label, useTheme } from '@/components/ui';
+import { useAccount } from '@/lib/account';
+import { NeedsPack } from '@/lib/cloud';
+import { purchasesAvailable, useCredits } from '@/lib/packs';
 import { useStore } from '@/lib/store';
 
 /** First screen: start a new event or join one with a code. */
@@ -17,6 +20,9 @@ export default function Welcome() {
   const [priceList, setPriceList] = useState<'last' | 'starter'>('last');
   const [busy, setBusy] = useState<'create' | 'join' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [needsPack, setNeedsPack] = useState<NeedsPack['reason'] | null>(null);
+  const { account } = useAccount();
+  const credits = useCredits(account?.uid ?? null);
 
   if (!store.loaded) {
     return (
@@ -35,9 +41,11 @@ export default function Welcome() {
   async function run(kind: 'create' | 'join', fn: () => Promise<void>) {
     setBusy(kind);
     setError(null);
+    setNeedsPack(null);
     try {
       await fn();
     } catch (e) {
+      if (e instanceof NeedsPack) setNeedsPack(e.reason);
       const msg = e instanceof Error ? e.message : String(e);
       setError(msg === 'timeout' ? 'Couldn’t reach the server. Check you have signal, then try again.' : msg);
     } finally {
@@ -101,6 +109,15 @@ export default function Welcome() {
                 ? 'Needs signal to start. After that each till keeps selling without it.'
                 : 'Sales are kept on this phone. You can change the price list once the event has started.'}
             </Body>
+            {shared && purchasesAvailable && (
+              <Body muted>
+                {!account
+                  ? 'Uses an event pack. Sign in on the Account screen to buy one or use yours.'
+                  : credits && credits.credits > 0
+                    ? `Uses 1 of the ${credits.credits} ${credits.credits === 1 ? 'event' : 'events'} left on your account.`
+                    : 'Uses an event pack. Your account has none left: buy one on the Account screen.'}
+              </Body>
+            )}
           </Card>
 
           <Card>
@@ -124,8 +141,16 @@ export default function Welcome() {
           </Card>
 
           {error && <Text style={{ color: t.danger, fontWeight: '700' }}>{error}</Text>}
+          {needsPack && (
+            <Button
+              title={needsPack === 'sign-in' ? 'Sign in' : 'Get an event pack'}
+              kind="primary"
+              onPress={() => router.push('/account')}
+            />
+          )}
 
           <Button title="Past events" onPress={() => router.push('/history')} />
+          {store.cloudEnabled && <Button title="Account" onPress={() => router.push('/account')} />}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>

@@ -1,5 +1,9 @@
 rules_version = '2';
 
+// Shared events are made by the server (startSharedEvent in functions/), which
+// can require and spend an event pack credit. So devices can't create events,
+// join codes or organiser codes here.
+//
 // Every device signs in anonymously. Access to an event comes from knowing its
 // join code: a device becomes a member by writing members/{its uid} with a code
 // that maps to that event. Members can read the event and add sales to it.
@@ -17,40 +21,30 @@ service cloud.firestore {
       return signedIn()
         && exists(/databases/$(database)/documents/events/$(eventId)/members/$(request.auth.uid));
     }
-    function isCreator(eventId) {
-      return signedIn()
-        && get(/databases/$(database)/documents/events/$(eventId)).data.createdBy == request.auth.uid;
-    }
-
     function isOrganiser(eventId) {
       return signedIn()
         && exists(/databases/$(database)/documents/events/$(eventId)/organisers/$(request.auth.uid));
     }
 
     // Join codes. Single lookups only (no listing), so codes can't be enumerated.
-    // A code can be created once, by the event's creator, and never changed.
+    // Codes are made by the server with the event, and never changed.
     match /codes/{code} {
       allow get: if signedIn();
-      allow create: if signedIn()
-        && code.size() == 6
-        && isCreator(request.resource.data.eventId);
     }
 
     match /events/{eventId} {
-      allow create: if signedIn()
-        && request.resource.data.createdBy == request.auth.uid
-        && request.resource.data.items is list
-        && request.resource.data.items.size() <= 200;
       allow get: if isMember(eventId)
         || (signedIn() && resource.data.createdBy == request.auth.uid);
       // Organisers may edit the name and price list, and close or reopen the event
-      // (closedAt); createdBy and code are fixed once set. Closing is a signal to
+      // (closedAt). createdBy, code, and the account that paid are fixed. Closing is a signal to
       // the tills to stop selling. Sales are still accepted afterwards, so that a
       // till with no signal at closing time doesn't lose what it took.
       allow update: if isOrganiser(eventId)
         && (request.resource.data.get('closedAt', null) == null || request.resource.data.closedAt is int)
         && request.resource.data.createdBy == resource.data.createdBy
-        && (resource.data.code == '' || request.resource.data.code == resource.data.code)
+        && request.resource.data.code == resource.data.code
+        && request.resource.data.get('account', null) == resource.data.get('account', null)
+        && request.resource.data.get('paid', null) == resource.data.get('paid', null)
         && request.resource.data.items.size() <= 200;
 
       match /members/{uid} {
@@ -64,14 +58,9 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.eventId == eventId;
       }
 
-      // The organiser code. Written once by the event's creator and never read
-      // back by any device: it is only ever compared against, below.
-      match /private/{docId} {
-        allow create: if docId == 'organiser'
-          && isCreator(eventId)
-          && request.resource.data.code is string
-          && request.resource.data.code.size() == 8;
-      }
+      // The organiser code is in private/organiser. The server writes it with the
+      // event, and no device can read or change it: it is only ever compared
+      // against, below. With no rule here, everything else is refused.
 
       // A device claims the organiser role by presenting the organiser code.
       // Each device can read only its own claim, so the code doesn't leak.
@@ -119,6 +108,21 @@ service cloud.firestore {
         allow update: if isMember(eventId)
           && request.resource.data.createdBy == request.auth.uid
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['createdBy']);
+      }
+    }
+
+    // Cash Tin accounts: event pack credits, and the packs bought and spent. Only
+    // the server writes these. An account can read its own, signed in on the
+    // account Auth (never a phone's anonymous event user).
+    function isAccount(uid) {
+      return signedIn()
+        && request.auth.uid == uid
+        && request.auth.token.firebase.sign_in_provider != 'anonymous';
+    }
+    match /accounts/{uid} {
+      allow get: if isAccount(uid);
+      match /{sub}/{docId} {
+        allow read: if isAccount(uid);
       }
     }
   }

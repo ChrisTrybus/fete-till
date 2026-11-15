@@ -97,14 +97,10 @@ describe('join codes', () => {
     await assertFails(getDoc(doc(anon(), 'codes', CODE)));
   });
 
-  test('only the event creator can reserve a code for it', async () => {
-    await assertSucceeds(setDoc(doc(as(ORGANISER), 'codes', 'XYZ789'), { eventId: EVENT }));
+  test('no device can make a join code, not even the event’s creator: the server does', async () => {
+    await assertFails(setDoc(doc(as(ORGANISER), 'codes', 'XYZ789'), { eventId: EVENT }));
     await assertFails(setDoc(doc(as(STRANGER), 'codes', 'HJK456'), { eventId: EVENT }));
     await assertFails(setDoc(doc(as(MEMBER), 'codes', 'HJK457'), { eventId: EVENT }));
-  });
-
-  test('a code must be 6 characters', async () => {
-    await assertFails(setDoc(doc(as(ORGANISER), 'codes', 'SHORT'), { eventId: EVENT }));
   });
 
   test('an existing code cannot be repointed or deleted', async () => {
@@ -131,11 +127,19 @@ describe('events', () => {
     await assertFails(getDocs(collection(as(MEMBER), 'events')));
   });
 
-  test('a device can create an event only in its own name', async () => {
+  test('no device can create an event: the server does, so it can charge an event pack', async () => {
     const event = { name: 'New', code: '', createdAt: 1, items: [] };
-    await assertSucceeds(setDoc(doc(as(STRANGER), 'events', 'mine'), { ...event, createdBy: STRANGER }));
-    await assertFails(setDoc(doc(as(STRANGER), 'events', 'forged'), { ...event, createdBy: ORGANISER }));
+    await assertFails(setDoc(doc(as(STRANGER), 'events', 'mine'), { ...event, createdBy: STRANGER }));
     await assertFails(setDoc(doc(anon(), 'events', 'anon'), { ...event, createdBy: 'nobody' }));
+  });
+
+  test('the account that paid for the event is fixed', async () => {
+    await env.withSecurityRulesDisabled((ctx) =>
+      updateDoc(doc(ctx.firestore(), 'events', EVENT), { account: 'acct-1', paid: true }),
+    );
+    await assertFails(updateDoc(doc(as(ORGANISER), 'events', EVENT), { account: 'acct-2' }));
+    await assertFails(updateDoc(doc(as(ORGANISER), 'events', EVENT), { paid: false }));
+    await assertSucceeds(updateDoc(doc(as(ORGANISER), 'events', EVENT), { name: 'Renamed' }));
   });
 
   test('only an organiser can edit the price list', async () => {
@@ -171,16 +175,6 @@ describe('events', () => {
     await assertSucceeds(updateDoc(doc(as(ORGANISER), 'events', EVENT), { items: [] }));
   });
 
-  test('a new event can be set up from scratch, the way the app does it', async () => {
-    const db = as(STRANGER);
-    const event = doc(db, 'events', 'fresh');
-    await assertSucceeds(setDoc(event, { name: 'New', code: '', createdBy: STRANGER, createdAt: 1, items: [] }));
-    await assertSucceeds(setDoc(doc(event, 'private', 'organiser'), { code: 'HJKMNPQR' }));
-    await assertSucceeds(setDoc(doc(event, 'organisers', STRANGER), { code: 'HJKMNPQR', claimedAt: 1 }));
-    await assertSucceeds(setDoc(doc(db, 'codes', 'NEW234'), { eventId: 'fresh' }));
-    await assertSucceeds(updateDoc(event, { code: 'NEW234' }));
-    await assertSucceeds(setDoc(doc(event, 'members', STRANGER), { code: 'NEW234', tillName: 'Till 1', joinedAt: 1 }));
-  });
 
   test('an event cannot be deleted', async () => {
     await assertFails(deleteDoc(doc(as(ORGANISER), 'events', EVENT)));
@@ -291,15 +285,14 @@ describe('organisers', () => {
     await assertFails(deleteDoc(secret));
   });
 
-  test('only the event creator can set the organiser code, and it must be 8 characters', async () => {
+  test('no device can set an organiser code, not even the event’s creator: the server does', async () => {
     await env.withSecurityRulesDisabled((ctx) =>
-      setDoc(doc(ctx.firestore(), 'events', 'event2'), { name: 'Other', code: '', createdBy: STRANGER, items: [] }),
+      setDoc(doc(ctx.firestore(), 'events', 'event2'), { name: 'Other', code: 'NEW234', createdBy: STRANGER, items: [] }),
     );
     const secret = (uid: string) => doc(as(uid), 'events', 'event2', 'private', 'organiser');
     await assertFails(setDoc(secret(MEMBER), { code: 'HJKMNPQR' }));
-    await assertFails(setDoc(secret(STRANGER), { code: 'SHORT' }));
+    await assertFails(setDoc(secret(STRANGER), { code: 'HJKMNPQR' }));
     await assertFails(setDoc(doc(as(STRANGER), 'events', 'event2', 'private', 'other'), { code: 'HJKMNPQR' }));
-    await assertSucceeds(setDoc(secret(STRANGER), { code: 'HJKMNPQR' }));
   });
 
   test('an organiser role cannot be removed', async () => {
@@ -424,5 +417,38 @@ describe('Gift Aid declarations', () => {
     await assertSucceeds(setDoc(ref(MEMBER, 'sale1'), declaration('sale1', MEMBER)));
     await assertFails(deleteDoc(ref(MEMBER, 'sale1')));
     await assertFails(deleteDoc(ref(ORGANISER, 'sale1')));
+  });
+});
+
+describe('accounts', () => {
+  const ACCOUNT = 'acct-1';
+  // Account sign-ins are by email, Google or Apple; a phone's event user is anonymous.
+  const asAnonymous = (uid: string) =>
+    env.authenticatedContext(uid, { firebase: { sign_in_provider: 'anonymous', identities: {} } }).firestore();
+
+  beforeEach(async () => {
+    await env.withSecurityRulesDisabled(async (ctx) => {
+      await setDoc(doc(ctx.firestore(), 'accounts', ACCOUNT), { credits: 3, unlocked: true });
+      await setDoc(doc(ctx.firestore(), 'accounts', ACCOUNT, 'purchases', 'tx1'), { product: 'cashtin_event_5', credits: 5 });
+    });
+  });
+
+  test('an account can read its own credits and purchases', async () => {
+    await assertSucceeds(getDoc(doc(as(ACCOUNT), 'accounts', ACCOUNT)));
+    await assertSucceeds(getDocs(collection(as(ACCOUNT), 'accounts', ACCOUNT, 'purchases')));
+  });
+
+  test('nobody else can, including an anonymous user with the same id', async () => {
+    await assertFails(getDoc(doc(as(STRANGER), 'accounts', ACCOUNT)));
+    await assertFails(getDocs(collection(as(STRANGER), 'accounts', ACCOUNT, 'purchases')));
+    await assertFails(getDoc(doc(asAnonymous(ACCOUNT), 'accounts', ACCOUNT)));
+    await assertFails(getDocs(collection(as(ACCOUNT), 'accounts')));
+  });
+
+  test('no device can give itself credits or record a purchase: only the server can', async () => {
+    await assertFails(updateDoc(doc(as(ACCOUNT), 'accounts', ACCOUNT), { credits: 99 }));
+    await assertFails(setDoc(doc(as(STRANGER), 'accounts', STRANGER), { credits: 5 }));
+    await assertFails(setDoc(doc(as(ACCOUNT), 'accounts', ACCOUNT, 'purchases', 'fake'), { credits: 5 }));
+    await assertFails(deleteDoc(doc(as(ACCOUNT), 'accounts', ACCOUNT, 'spent', 'event1')));
   });
 });

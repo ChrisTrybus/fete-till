@@ -4,7 +4,9 @@
   "main": "expo-router/entry",
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-google-signin/google-signin": "^17.0.0",
     "expo": "~58.0.23",
+    "expo-apple-authentication": "~58.0.3",
     "expo-constants": "~58.0.15",
     "expo-crypto": "~58.0.7",
     "expo-haptics": "~58.0.7",
@@ -20,6 +22,7 @@
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-native": "0.88.1",
+    "react-native-purchases": "^11.0.2",
     "react-native-safe-area-context": "~5.11.1",
     "react-native-screens": "~4.30.1",
     "react-native-web": "~0.21.4"
@@ -52,7 +55,8 @@
   "jest": {
     "preset": "jest-expo",
     "roots": [
-      "<rootDir>/src"
+      "<rootDir>/src",
+      "<rootDir>/functions/src"
     ]
   }
 }

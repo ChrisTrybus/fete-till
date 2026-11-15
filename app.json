@@ -12,7 +12,8 @@
       "bundleIdentifier": "com.fetetill.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
-      }
+      },
+      "usesAppleSignIn": true
     },
     "android": {
       "adaptiveIcon": {
@@ -43,7 +44,8 @@
         }
       ],
       "expo-sharing",
-      "expo-sqlite"
+      "expo-sqlite",
+      "expo-apple-authentication"
     ],
     "scheme": "fetetill",
     "experiments": {

@@ -17,5 +17,11 @@
     "**/*.tsx",
     ".expo/types/**/*.ts",
     "expo-env.d.ts"
+  ],
+  "exclude": [
+    "node_modules",
+    "functions/node_modules",
+    "functions/lib",
+    "functions/src/index.ts"
   ]
 }

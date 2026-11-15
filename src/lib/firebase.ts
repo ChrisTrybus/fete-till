@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getApp, getApps, initializeApp } from 'firebase/app';
+import { getApps, initializeApp, type FirebaseApp } from 'firebase/app';
 import * as FirebaseAuth from 'firebase/auth';
 import { getFirestore, type Firestore } from 'firebase/firestore';
+import { getFunctions, type Functions } from 'firebase/functions';
 import { Platform } from 'react-native';
 
 // Values come from the Firebase console (Project settings > Your apps > Web app).
@@ -22,11 +23,48 @@ export const cloudEnabled = Boolean(config.apiKey && config.projectId);
 type Cloud = { db: Firestore; auth: FirebaseAuth.Auth };
 let cloud: Cloud | null = null;
 
+/** The named Firebase app, made once. The default app is events; ACCOUNT_APP is Cash Tin accounts. */
+const appNamed = (name?: string): FirebaseApp =>
+  getApps().find((a) => a.name === (name ?? '[DEFAULT]')) ?? (name ? initializeApp(config, name) : initializeApp(config));
+
 export function getCloud(): Cloud | null {
   if (!cloudEnabled) return null;
   if (cloud) return cloud;
-  const app = getApps().length ? getApp() : initializeApp(config);
+  const app = appNamed();
+  cloud = { db: getFirestore(app), auth: authFor(app) };
+  return cloud;
+}
 
+// Accounts sign in on a Firebase app of their own. Events keep using each phone's
+// anonymous user on the default app, so a phone's place in an event never depends on
+// which account it is signed in to, and two phones on one account stay two tills.
+const ACCOUNT_APP = 'account';
+let accountAuth: FirebaseAuth.Auth | null = null;
+
+/** The Firebase Auth that Cash Tin accounts sign in to, or null if sync isn't set up. */
+export function getAccountAuth(): FirebaseAuth.Auth | null {
+  if (!cloudEnabled) return null;
+  accountAuth ??= authFor(appNamed(ACCOUNT_APP));
+  return accountAuth;
+}
+
+// Cloud Functions (functions/). Must match the region in functions/src/index.ts.
+const FUNCTIONS_REGION = 'europe-west2';
+
+/** Functions called as the phone's anonymous event user, such as starting a shared event. */
+export function getEventFunctions(): Functions | null {
+  return cloudEnabled ? getFunctions(appNamed(), FUNCTIONS_REGION) : null;
+}
+
+/** Functions and Firestore used as the signed-in Cash Tin account: credits and purchases. */
+export function getAccountCloud(): { functions: Functions; db: Firestore } | null {
+  if (!cloudEnabled) return null;
+  getAccountAuth(); // the account app's Auth must exist before its Functions and Firestore use it
+  const app = appNamed(ACCOUNT_APP);
+  return { functions: getFunctions(app, FUNCTIONS_REGION), db: getFirestore(app) };
+}
+
+function authFor(app: FirebaseApp): FirebaseAuth.Auth {
   let auth: FirebaseAuth.Auth;
   if (Platform.OS === 'web') {
     auth = FirebaseAuth.getAuth(app);
@@ -47,9 +85,7 @@ export function getCloud(): Cloud | null {
       auth = FirebaseAuth.getAuth(app); // already initialised (fast refresh)
     }
   }
-
-  cloud = { db: getFirestore(app), auth };
-  return cloud;
+  return auth;
 }
 
 export async function ensureSignedIn(): Promise<string> {

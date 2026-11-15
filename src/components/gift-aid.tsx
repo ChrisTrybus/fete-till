@@ -8,8 +8,9 @@ import type { Sale } from '@/lib/types';
 
 /**
  * Asks whether a donor will Gift Aid their donation and, if so, takes their name and
- * address and has them agree to the declaration. Shown over the till after a sale
- * with a donation in it. The sale is already saved, so closing this loses nothing.
+ * address and has them agree to the declaration. Opened by the volunteer, from the
+ * Add Gift Aid button the till shows after a larger donation or from the sale on Day
+ * total. The sale is already saved, so closing this loses nothing.
  */
 export function GiftAidPrompt({ sale, onDone }: { sale: Sale | null; onDone: (message: string | null) => void }) {
   return (
