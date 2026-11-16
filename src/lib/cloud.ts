@@ -8,6 +8,7 @@
 //   events/{eventId}/giftAid/{saleId} GiftAidDeclaration + { createdBy }   only organisers can read these
 // Events, their codes and organiser codes are made by the server: see functions/src/index.ts.
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { randomUUID } from 'expo-crypto';
 import {
   collection,
   doc,
@@ -122,65 +123,64 @@ export async function claimOrganiser(eventId: string, organiserCode: string) {
   );
 }
 
-const toMember = (m: DocumentData, isLocal: boolean): Member => {
+const toMember = (m: DocumentData, uid: string, isLocal: boolean): Member => {
   return {
     deviceId: typeof m.deviceId === 'string' ? m.deviceId : '',
     tillName: typeof m.tillName === 'string' ? m.tillName : '',
     float: typeof m.float === 'number' && Number.isSafeInteger(m.float) && m.float > 0 ? m.float : 0,
     isLocal,
+    uid,
   };
 };
 
 /**
  * Joins an event by its code and restores the current member's opening float.
  */
-export async function joinEvent(rawCode: string, tillName: string, deviceId?: string) {
-  const uid = await ensureSignedIn();
+export async function joinEvent(rawCode: string, tillName: string, deviceId?: string): Promise<{
+  eventId: string; code: string; eventName: string; items: Item[]; float: number; giftAidOver: number | null; memberUid?: string;
+}> {
+  await ensureSignedIn();
   const code = normaliseCode(rawCode);
   const codeSnap = await withTimeout(getDoc(doc(db(), 'codes', code)));
   if (!codeSnap.exists()) throw new Error(`No event found with code ${code}. Check the code and try again.`);
   const eventId = codeSnap.data().eventId as string;
-  await joinAsMember(eventId, code, tillName, deviceId ? { deviceId } : undefined);
+  const registered = await joinAsMember(eventId, code, tillName, { deviceId: deviceId ?? '' });
   const eventSnap = await withTimeout(getDoc(doc(db(), 'events', eventId)));
   const data = eventSnap.data() ?? {};
 
-  let float = 0;
-  try {
-    const member = await withTimeout(getDoc(doc(db(), 'events', eventId, 'members', uid)));
-    if (member.exists()) float = toMember(member.data(), true).float;
-  } catch {
-    // Joining has worked. The float can be entered again on the Event tab.
-  }
-  return { eventId, code, eventName: (data.name as string) ?? 'Event', items: (data.items as Item[]) ?? [], float, giftAidOver: giftAidOverOf(data) };
+  return { eventId, code, eventName: (data.name as string) ?? 'Event', items: (data.items as Item[]) ?? [], float: registered.float, giftAidOver: giftAidOverOf(data), memberUid: registered.uid };
 }
 
 /** The event's Gift Aid setting: null (declarations off) unless it holds a sensible amount. */
 const giftAidOverOf = (d: DocumentData): number | null =>
   typeof d.giftAidOver === 'number' && d.giftAidOver >= 0 ? d.giftAidOver : null;
 
-/**
- * (Re)registers this device's anonymous user as a member. Safe to call on every launch.
- * `till` carries what the other tills should know about this one: its opening float,
- * and the device id that tells this phone's own entry apart from the rest.
- *
- * The write is merged into any record already there, so joining again without a
- * float leaves the one recorded earlier in place.
- */
-export async function joinAsMember(eventId: string, code: string, tillName: string, till?: { deviceId: string; float?: number }) {
-  const uid = await ensureSignedIn();
-  await withTimeout(
-    setDoc(
-      doc(db(), 'events', eventId, 'members', uid),
-      {
-        code,
-        tillName,
-        joinedAt: Date.now(),
-        ...(till ? { deviceId: till.deviceId } : {}),
-        ...(till?.float === undefined ? {} : { float: till.float }),
-      },
-      { merge: true },
-    ),
-  );
+const recoveryKeys = new Map<string, Promise<string>>();
+
+function tillRecoveryKey(eventId: string): Promise<string> {
+  const pending = recoveryKeys.get(eventId);
+  if (pending) return pending;
+  const load = (async () => {
+    const storageKey = `fetetill:till-recovery:${eventId}`;
+    const saved = await AsyncStorage.getItem(storageKey);
+    if (saved) return saved;
+    const key = randomUUID() + randomUUID();
+    await AsyncStorage.setItem(storageKey, key);
+    return key;
+  })().finally(() => recoveryKeys.delete(eventId));
+  recoveryKeys.set(eventId, load);
+  return load;
+}
+
+/** Rejoins the till and recovers its opening float even if Firebase issued a new UID. */
+export async function joinAsMember(eventId: string, code: string, tillName: string, till: { deviceId: string; float?: number }) {
+  await ensureSignedIn();
+  const functions = getEventFunctions();
+  if (!functions) throw new Error('Cloud sync is not configured');
+  const recoveryKey = await tillRecoveryKey(eventId);
+  const register = httpsCallable<object, { float: number; uid: string }>(functions, 'registerTill', { timeout: 10000 });
+  const { data } = await register({ eventId, code, tillName, recoveryKey, ...till });
+  return data;
 }
 
 /** Sends one queued write. Throws if it couldn't be confirmed, so the caller keeps it queued. */
@@ -251,7 +251,10 @@ export function watchEvent(
         collection(event, 'members'),
         (s) => {
           const uid = getCloud()?.auth.currentUser?.uid;
-          onMembers(s.docs.map((d) => toMember(d.data(), d.id === uid)));
+          onMembers(s.docs.flatMap((d) => {
+            const member = d.data();
+            return member.superseded === true ? [] : [toMember(member, d.id, d.id === uid)];
+          }));
         },
         onError,
       )

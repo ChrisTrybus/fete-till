@@ -11,7 +11,7 @@
 //
 // Shared events are only made here (the rules stop devices making them), so a
 // credit can be required and spent in the same transaction that makes the event.
-import { randomInt } from 'node:crypto';
+import { createHash, randomInt } from 'node:crypto';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import { FieldValue, getFirestore, type DocumentReference, type Transaction } from 'firebase-admin/firestore';
@@ -21,6 +21,7 @@ import { logger } from 'firebase-functions';
 import { defineBoolean, defineSecret } from 'firebase-functions/params';
 import { makeCode, packPurchases, readEventRequest } from './packs';
 import { giftAidDonation, readGiftAidRequest } from './gift-aid';
+import { recoverOpeningFloat } from './till-recovery';
 
 initializeApp();
 setGlobalOptions({ region: 'europe-west2', maxInstances: 10 });
@@ -216,5 +217,51 @@ export const submitGiftAid = onCall(async (req) => {
       throw new HttpsError('already-exists', 'This sale already has a Gift Aid declaration.');
     }
     tx.create(declaration, record);
+  });
+});
+
+export const registerTill = onCall(async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'Not signed in.');
+  const { eventId, code, tillName, deviceId, recoveryKey, float } = req.data ?? {};
+  if (typeof eventId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(eventId) || /^__.*__$/.test(eventId)
+    || typeof code !== 'string' || !/^[A-Z0-9]{6}$/.test(code)
+    || typeof tillName !== 'string' || tillName.length > 256 || typeof deviceId !== 'string' || deviceId.length > 100
+    || typeof recoveryKey !== 'string' || !/^[a-f0-9-]{72}$/.test(recoveryKey)
+    || (float !== undefined && (!Number.isSafeInteger(float) || float < 0))) {
+    throw new HttpsError('invalid-argument', 'Check the till registration.');
+  }
+  await limitCalls('registerTill', uid, 60);
+
+  const event = db().collection('events').doc(eventId);
+  const keyId = createHash('sha256').update(recoveryKey).digest('hex');
+  const binding = event.collection('tillRecovery').doc(keyId);
+  const members = event.collection('members');
+  const current = members.doc(uid);
+  return db().runTransaction(async (tx) => {
+    const [eventSnap, bindingSnap, currentSnap] = await tx.getAll(event, binding, current);
+    if (!eventSnap.exists || eventSnap.get('code') !== code) {
+      throw new HttpsError('permission-denied', 'That join code does not match the event.');
+    }
+    const previousUid = bindingSnap.get('uid');
+    const previous = typeof previousUid === 'string' && previousUid !== uid ? members.doc(previousUid) : null;
+    const source = previous ? await tx.get(previous) : currentSnap;
+    const openingFloat = recoverOpeningFloat({
+      keyId,
+      currentKey: currentSnap.get('floatRecoveryId'),
+      currentSuperseded: currentSnap.get('superseded') === true,
+      hasBinding: bindingSnap.exists,
+      previousKey: source.get('floatRecoveryId'),
+      moving: previous !== null,
+      savedFloat: source.get('float'),
+      pendingFloat: float,
+    });
+    if (openingFloat === null) {
+      throw new HttpsError('permission-denied', 'This membership already has a different recovery key.');
+    }
+    if (previous) tx.update(previous, { float: 0, superseded: true });
+    tx.set(current, { code, tillName, deviceId, joinedAt: Date.now(), float: openingFloat, floatRecoveryId: keyId, superseded: false }, { merge: true });
+    tx.set(binding, { uid });
+    return { float: openingFloat, uid };
   });
 });

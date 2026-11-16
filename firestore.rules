@@ -51,12 +51,19 @@ service cloud.firestore {
         allow read: if isMember(eventId);
         // A member doc also carries the till's opening float (whole pence), which
         // the other tills add to its cash sales to say what its tin should hold.
-        allow create, update: if signedIn()
+        function validRegistration() {
+          return signedIn()
           && request.auth.uid == uid
           && request.resource.data.tillName is string
           && (!('float' in request.resource.data)
             || (request.resource.data.float is int && request.resource.data.float >= 0))
           && get(/databases/$(database)/documents/codes/$(request.resource.data.code)).data.eventId == eventId;
+        }
+        allow create: if validRegistration()
+          && !request.resource.data.keys().hasAny(['floatRecoveryId', 'superseded']);
+        allow update: if validRegistration()
+          && !resource.data.get('superseded', false)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['floatRecoveryId', 'superseded']);
       }
 
       // The organiser code is in private/organiser. The server writes it with the

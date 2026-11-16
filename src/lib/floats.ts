@@ -17,7 +17,9 @@ export function tillFloats(session: Session | null, members: Member[]): TillFloa
   if (!session) return [];
   const all: TillFloat[] = [
     { tillName: session.tillName, float: session.float ?? 0 },
-    ...(session.mode === 'cloud' ? members.filter((m) => !m.isLocal) : []),
+    ...(session.mode === 'cloud'
+      ? members.filter((m) => !m.isLocal && (!session.floatMemberUid || m.uid !== session.floatMemberUid))
+      : []),
   ];
   const byTill = new Map<string, TillFloat>();
   for (const { tillName, float } of all) {

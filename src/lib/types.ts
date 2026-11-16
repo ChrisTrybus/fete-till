@@ -65,6 +65,9 @@ export type Session = {
   startedAt?: number;
   // Cash put in this till's tin before the first sale (pence), so the counted cash can be checked.
   float?: number;
+  // A locally edited float that has not reached the membership record yet.
+  floatPending?: boolean;
+  floatMemberUid?: string;
 };
 
 // The opening float of one till (pence).
@@ -72,7 +75,7 @@ export type TillFloat = { tillName: string; float: number };
 
 // One authenticated membership record. isLocal is set from the document ID and
 // the signed-in UID when reading Firestore, independently of the document fields.
-export type Member = { deviceId: string; tillName: string; float: number; joinedAt?: number; isLocal?: boolean };
+export type Member = { deviceId: string; tillName: string; float: number; joinedAt?: number; isLocal?: boolean; uid?: string };
 
 // An event this phone has left, as listed under Past events. The totals are
 // saved with it so the list can be shown without loading every sale.

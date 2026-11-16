@@ -44,7 +44,7 @@ Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
 
 Without the functions deployed, events on just one phone still work, but "Several tills" can't start an event.
 
-For the Gift Aid security update, deploy the `submitGiftAid` function first, update tills, then deploy the Firestore rules. Older builds cannot sync shared Gift Aid declarations once the new rules are active. In-progress declarations on updated tills enter claim totals after the server accepts them and the matching sale is available. Float recovery and late declarations rely on the original Firebase member sign-in, so after a till loses that sign-in, reconcile any old opening float before recording it again.
+For this security update, deploy the `submitGiftAid` and `registerTill` functions first, update tills, then deploy the Firestore rules. Older builds cannot sync shared Gift Aid declarations once the new rules are active. In-progress declarations enter claim totals after the server accepts them and the matching sale is available. Once a till has registered with the updated app, its locally stored recovery key lets a new Firebase sign-in recover the same opening float. If the original sign-in was lost before that first registration, reconcile the old float manually. Late Gift Aid declarations still require the original sale owner's sign-in.
 
 ### Event packs
 

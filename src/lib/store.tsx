@@ -259,13 +259,17 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   /** (Re)registers this phone with the event: as a member, and as an organiser if it holds the code. */
   const register = useCallback(
     async (session: Session, isCurrent: () => boolean) => {
-      await Cloud.joinAsMember(session.eventId, session.code, session.tillName, {
+      const registered = await Cloud.joinAsMember(session.eventId, session.code, session.tillName, {
         deviceId: stateRef.current.deviceId,
-        float: session.float ?? 0,
+        ...(session.floatPending ? { float: session.float ?? 0 } : {}),
       });
       if (!isCurrent()) return;
+      update((s) => {
+        if (!s.session || s.session.float !== session.float || s.session.floatPending !== session.floatPending) return s;
+        return { ...s, session: { ...s.session, float: registered.float || undefined, floatPending: false, floatMemberUid: registered.uid } };
+      });
       const code = stateRef.current.session?.organiserCode;
-      if (!code) return;
+      if (!code) return registered;
       try {
         await Cloud.claimOrganiser(session.eventId, code);
       } catch (e) {
@@ -277,6 +281,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             : s);
         }
       }
+      return registered;
     },
     [update],
   );
@@ -313,12 +318,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     flushing.current = true;
     try {
       if (memberOk.current !== session.eventId) {
-        await register(session, isCurrent);
+        const registered = await register(session, isCurrent);
         if (!isCurrent()) return;
         // If the till was renamed or its float changed while that was sending, the
         // other tills have the old details, so the next flush registers again.
         const now = stateRef.current.session;
-        if (now?.tillName === session.tillName && now.float === session.float) markRegistered(session.eventId);
+        const openingFloat = registered ? registered.float || undefined : session.float;
+        if (now?.tillName === session.tillName && now.float === openingFloat && !now.floatPending) markRegistered(session.eventId);
       }
       while (stateRef.current.outbox.length) {
         setSyncStatus('sending');
@@ -517,12 +523,10 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const joinCloudEvent = useCallback(
     async (code: string, tillName: string) => {
       const ev = await Cloud.joinEvent(code, tillName, stateRef.current.deviceId);
-      // A float carried over from an earlier visit is registered again, so the other tills see it against this sign-in.
-      if (ev.float) memberOk.current = null;
-      else markRegistered(ev.eventId);
+      markRegistered(ev.eventId);
       update((s) => ({
         ...s,
-        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), giftAidOver: ev.giftAidOver ?? null, ...(ev.float ? { float: ev.float } : {}) },
+        session: { eventId: ev.eventId, eventName: ev.eventName, code: ev.code, tillName, mode: 'cloud', startedAt: Date.now(), giftAidOver: ev.giftAidOver ?? null, ...(ev.float ? { float: ev.float } : {}), floatMemberUid: ev.memberUid },
         items: ev.items,
         sales: {},
         outbox: [],
@@ -598,7 +602,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
   const setFloat = useCallback(
     (pence: number) => {
       memberOk.current = null; // re-register so other tills see the float
-      update((s) => (s.session ? { ...s, session: { ...s.session, float: pence > 0 ? Math.round(pence) : undefined } } : s));
+      update((s) => (s.session ? { ...s, session: { ...s.session, float: pence > 0 ? Math.round(pence) : undefined, floatPending: s.session.mode === 'cloud' } } : s));
       setTimeout(flush, 0);
     },
     [update, flush],

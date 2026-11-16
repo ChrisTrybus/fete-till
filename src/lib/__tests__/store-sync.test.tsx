@@ -66,7 +66,7 @@ const goOffline = () => {
 };
 const goOnline = () => {
   cloud.pushOp.mockResolvedValue(undefined);
-  cloud.joinAsMember.mockResolvedValue(undefined);
+  cloud.joinAsMember.mockImplementation(async (_eventId, _code, _tillName, till) => ({ float: till.float ?? 0, uid: 'phone-uid' }));
 };
 
 async function sell(method: 'cash' | 'card' = 'cash') {
@@ -206,7 +206,7 @@ describe('a whole session with no signal', () => {
     const [a, b, c] = [await sell(), await sell(), await sell()];
 
     cloud.pushOp.mockClear();
-    cloud.joinAsMember.mockResolvedValue(undefined);
+    cloud.joinAsMember.mockResolvedValue({ float: 0, uid: 'phone-uid' });
     cloud.pushOp.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('timeout'));
     await settle(15_000);
 
@@ -274,7 +274,7 @@ describe('the app is killed with unsent sales', () => {
     await settle(15_000);
 
     // A restart may bring a new anonymous user, so the till re-joins before sending.
-    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 0 });
+    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId });
     expect(pushedOps().map(opKey)).toEqual([`sale:${a.id}`, `sale:${b.id}`, `void:${a.id}`]);
     expect(store.outbox).toHaveLength(0);
     expect(store.syncStatus).toBe('synced');
@@ -918,7 +918,7 @@ describe('tills and stock', () => {
     expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 2500 });
   });
 
-  test('a phone that rejoins an event gets its float back and tells the other tills again', async () => {
+  test('a phone that rejoins uses the float returned by the server registration', async () => {
     await launch();
     cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 1500, giftAidOver: null });
 
@@ -928,7 +928,7 @@ describe('tills and stock', () => {
     expect(cloud.joinEvent).toHaveBeenCalledWith('ABC234', 'Tombola', store.deviceId);
     expect(store.session?.float).toBe(1500);
     expect(store.floats).toEqual([{ tillName: 'Tombola', float: 1500 }]);
-    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Tombola', { deviceId: store.deviceId, float: 1500 });
+    expect(cloud.joinAsMember).not.toHaveBeenCalled();
   });
 
   test('floats are saved with the event when the phone leaves it', async () => {

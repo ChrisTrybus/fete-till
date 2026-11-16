@@ -83,6 +83,15 @@ beforeEach(async () => {
   });
 });
 
+test('clients cannot edit a recovery binding or restore a superseded membership', async () => {
+  const member = (uid: string) => doc(as(uid), 'events', EVENT, 'members', uid);
+  await assertFails(updateDoc(member(OTHER_MEMBER), { floatRecoveryId: 'recovery-binding' }));
+  await env.withSecurityRulesDisabled((ctx) =>
+    updateDoc(doc(ctx.firestore(), 'events', EVENT, 'members', MEMBER), { float: 0, superseded: true, floatRecoveryId: 'recovery-binding' }),
+  );
+  await assertFails(updateDoc(member(MEMBER), { float: 2000 }));
+});
+
 describe('join codes', () => {
   test('a signed-in device can look up a single code', async () => {
     await assertSucceeds(getDoc(doc(as(STRANGER), 'codes', CODE)));

@@ -71,8 +71,8 @@ function authFor(app: FirebaseApp): FirebaseAuth.Auth {
   } else {
     // getReactNativePersistence ships in the React Native build of firebase/auth but
     // is missing from the web type definitions, hence the cast. If it is unavailable
-    // we fall back to in-memory auth: the app re-joins the event with its stored
-    // code on launch, so a new anonymous user id is harmless.
+    // we fall back to in-memory auth. The app re-registers with its saved event
+    // code and recovery key if Firebase assigns a new anonymous user ID.
     const rnPersistence = (FirebaseAuth as unknown as {
       getReactNativePersistence?: (s: typeof AsyncStorage) => FirebaseAuth.Persistence;
     }).getReactNativePersistence;
