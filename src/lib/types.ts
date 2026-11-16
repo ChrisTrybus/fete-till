@@ -28,6 +28,7 @@ export type SaleLine = {
 export type PaymentMethod = 'cash' | 'card';
 
 export type Sale = {
+  createdBy?: string; // authenticated writer for a synced sale
   id: string; // generated on the device; also the Firestore doc id, so retries are idempotent
   at: number; // epoch ms
   total: number; // pence
@@ -69,10 +70,9 @@ export type Session = {
 // The opening float of one till (pence).
 export type TillFloat = { tillName: string; float: number };
 
-// A phone that has joined a shared event, as the other tills see it.
-// `joinedAt` is when it last registered (epoch ms). A phone whose sign-in changed
-// appears more than once; its latest registration is the one that counts.
-export type Member = { deviceId: string; tillName: string; float: number; joinedAt?: number };
+// One authenticated membership record. isLocal is set from the document ID and
+// the signed-in UID when reading Firestore, independently of the document fields.
+export type Member = { deviceId: string; tillName: string; float: number; joinedAt?: number; isLocal?: boolean };
 
 // An event this phone has left, as listed under Past events. The totals are
 // saved with it so the list can be shown without loading every sale.
@@ -95,6 +95,8 @@ export type PastEvent = {
 // A donor's Gift Aid declaration, taken on the till after a sale that included a donation.
 // It holds a name and address, so in a shared event only organisers can read it back.
 export type GiftAidDeclaration = {
+  createdBy?: string; // authenticated writer for a synced declaration
+  pendingSync?: boolean; // a shared declaration awaiting backend acceptance
   saleId: string; // the sale holding the donation; also the Firestore doc id
   at: number; // when the declaration was made (epoch ms)
   // When the donation was taken: the sale's time (epoch ms). HMRC's schedule wants this

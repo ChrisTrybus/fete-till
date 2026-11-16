@@ -1,4 +1,5 @@
 import type { Sale } from './types';
+import { csvCell } from './csv';
 
 export type DayTotals = {
   takings: number;
@@ -43,7 +44,6 @@ export function summarise(sales: Sale[]): DayTotals {
 
 /** CSV export for the treasurer: one row per sale line. */
 export function salesToCsv(sales: Sale[]): string {
-  const esc = (v: string | number) => `"${String(v).replace(/"/g, '""')}"`;
   const rows = [['Time', 'Till', 'Payment', 'Item', 'Qty', 'Unit price', 'Line total', 'Voided', 'Card reference']];
   for (const s of [...sales].sort((a, b) => a.at - b.at)) {
     for (const l of s.lines) {
@@ -61,5 +61,5 @@ export function salesToCsv(sales: Sale[]): string {
       ]);
     }
   }
-  return rows.map((r) => r.map(esc).join(',')).join('\n');
+  return rows.map((r) => r.map(csvCell).join(',')).join('\n');
 }

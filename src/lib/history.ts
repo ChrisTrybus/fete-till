@@ -2,6 +2,7 @@
 // it. The list of events is one small entry; each event's sales are stored
 // separately, so opening the list never loads every sale ever taken.
 import { historyStorage } from './history-storage';
+import { isSaleRecord } from './sale-record';
 import { summarise } from './totals';
 import type { GiftAidDeclaration, PastEvent, Sale, Session, TillFloat } from './types';
 
@@ -61,7 +62,7 @@ async function readList<T>(key: string): Promise<T[]> {
     return []; // unreadable: the event still shows, with the totals saved in the list
   }
 }
-const readSales = (id: string) => readList<Sale>(salesKey(id));
+const readSales = async (id: string) => (await readList<unknown>(salesKey(id))).filter(isSaleRecord);
 const readGiftAid = (id: string) => readList<GiftAidDeclaration>(giftAidKey(id));
 
 /**

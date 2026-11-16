@@ -14,12 +14,13 @@
 import { randomInt } from 'node:crypto';
 import { initializeApp } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
-import { FieldValue, getFirestore, type DocumentReference } from 'firebase-admin/firestore';
+import { FieldValue, getFirestore, type DocumentReference, type Transaction } from 'firebase-admin/firestore';
 import { setGlobalOptions } from 'firebase-functions';
 import { HttpsError, onCall, type CallableRequest } from 'firebase-functions/https';
 import { logger } from 'firebase-functions';
 import { defineBoolean, defineSecret } from 'firebase-functions/params';
 import { makeCode, packPurchases, readEventRequest } from './packs';
+import { giftAidDonation, readGiftAidRequest } from './gift-aid';
 
 initializeApp();
 setGlobalOptions({ region: 'europe-west2', maxInstances: 10 });
@@ -36,6 +37,23 @@ const ALLOW_SANDBOX_PURCHASES = defineBoolean('ALLOW_SANDBOX_PURCHASES', {
 
 const db = () => getFirestore();
 
+async function reserveCall(tx: Transaction, operation: string, uid: string, limit: number, windowMs: number) {
+  const ref = db().collection('callableLimits').doc(operation).collection('callers').doc(uid);
+  const snap = await tx.get(ref);
+  const now = Date.now();
+  const window = Math.floor(now / windowMs);
+  const count = snap.get('window') === window ? Number(snap.get('count')) : 0;
+  if (count >= limit) throw new HttpsError('resource-exhausted', 'Too many requests. Try again shortly.');
+  return () => tx.set(ref, { window, count: count + 1 });
+}
+
+async function limitCalls(operation: string, uid: string, perMinute: number) {
+  await db().runTransaction(async (tx) => {
+    const commitLimit = await reserveCall(tx, operation, uid, perMinute, 60_000);
+    commitLimit();
+  });
+}
+
 /** The caller's uid, refusing an anonymous sign-in, which is a phone's event user rather than an account. */
 function accountUid(req: CallableRequest): string {
   if (!req.auth) throw new HttpsError('unauthenticated', 'Sign in to your Cash Tin account first.', { reason: 'sign-in' });
@@ -45,12 +63,14 @@ function accountUid(req: CallableRequest): string {
   return req.auth.uid;
 }
 
-/** Counts any packs this account has bought that aren't on it yet. Safe to call as often as the app likes. */
+/** Counts any packs this account has bought that aren't on it yet. */
 export const syncPurchases = onCall({ secrets: [REVENUECAT_SECRET_KEY] }, async (req) => {
   const uid = accountUid(req);
+  await limitCalls('syncPurchases', uid, 6);
 
   const res = await fetch(`https://api.revenuecat.com/v1/subscribers/${encodeURIComponent(uid)}`, {
     headers: { Authorization: `Bearer ${REVENUECAT_SECRET_KEY.value()}`, Accept: 'application/json' },
+    signal: AbortSignal.timeout(8000),
   });
   if (!res.ok) {
     logger.error('RevenueCat lookup failed', { status: res.status });
@@ -92,6 +112,7 @@ export const startSharedEvent = onCall(async (req) => {
   const phone = req.auth.uid;
   const r = readEventRequest(req.data);
   if (typeof r === 'string') throw new HttpsError('invalid-argument', r);
+  await limitCalls('startSharedEvent', phone, 30);
 
   const event = db().doc(`events/${r.eventId}`);
   const organiserDoc = event.collection('private').doc('organiser');
@@ -136,6 +157,7 @@ export const startSharedEvent = onCall(async (req) => {
         });
       }
     }
+    const commitLimit = account ? null : await reserveCall(tx, 'freeSharedEvents', phone, 20, 3_600_000);
 
     // A join code nobody is using. Five tries at 31^6 codes each is plenty.
     const candidates = Array.from({ length: 5 }, () => makeCode(6, randomInt));
@@ -145,6 +167,7 @@ export const startSharedEvent = onCall(async (req) => {
     const organiserCode = makeCode(8, randomInt);
     const now = Date.now();
 
+    commitLimit?.();
     tx.create(event, {
       name: r.name,
       code,
@@ -168,5 +191,30 @@ export const startSharedEvent = onCall(async (req) => {
       tx.create(account.collection('spent').doc(r.eventId), { eventName: r.name, at: now });
     }
     return { eventId: r.eventId, code, organiserCode, name: r.name, items: r.items };
+  });
+});
+
+export const submitGiftAid = onCall(async (req) => {
+  const uid = req.auth?.uid;
+  if (!uid) throw new HttpsError('unauthenticated', 'Not signed in.');
+  const parsed = readGiftAidRequest(req.data);
+  if (!parsed) throw new HttpsError('invalid-argument', 'Check the Gift Aid declaration.');
+  await limitCalls('submitGiftAid', uid, 180);
+  const { eventId, saleId, ...details } = parsed;
+  const event = db().collection('events').doc(eventId);
+  const declaration = event.collection('giftAid').doc(saleId);
+  return db().runTransaction(async (tx) => {
+    const [member, sale, existing] = await tx.getAll(
+      event.collection('members').doc(uid), event.collection('sales').doc(saleId), declaration,
+    );
+    const donation = giftAidDonation(sale.data() ?? {}, uid);
+    if (!member.exists || !donation) throw new HttpsError('permission-denied', 'The declaration must match a donation taken by this till.');
+    const record = { saleId, ...details, ...donation, createdBy: uid };
+    if (existing.exists) {
+      // The original write might have succeeded before its reply reached the till.
+      if (Object.entries(record).every(([key, value]) => existing.get(key) === value)) return;
+      throw new HttpsError('already-exists', 'This sale already has a Gift Aid declaration.');
+    }
+    tx.create(declaration, record);
   });
 });

@@ -44,6 +44,8 @@ Scan the QR code with Expo Go, or press `i` / `a` for a simulator.
 
 Without the functions deployed, events on just one phone still work, but "Several tills" can't start an event.
 
+For the Gift Aid security update, deploy the `submitGiftAid` function first, update tills, then deploy the Firestore rules. Older builds cannot sync shared Gift Aid declarations once the new rules are active. In-progress declarations on updated tills enter claim totals after the server accepts them and the matching sale is available. Float recovery and late declarations rely on the original Firebase member sign-in, so after a till loses that sign-in, reconcile any old opening float before recording it again.
+
 ### Event packs
 
 Starting an event with several tills can cost one credit from an event pack (1 event for 99p, 5 for £2.99), bought in the app. Purchases go through RevenueCat, which handles the App Store and Google Play. The server checks every purchase with RevenueCat before adding credits.

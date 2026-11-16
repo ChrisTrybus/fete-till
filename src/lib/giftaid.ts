@@ -3,6 +3,7 @@
 // It applies to donations only, never to something bought, so only price-list items
 // marked as donations count.
 import type { GiftAidDeclaration, Item, Sale } from './types';
+import { csvCell } from './csv';
 
 /** HMRC adds 25p for every £1 donated. */
 export const GIFT_AID_RATE = 0.25;
@@ -83,12 +84,16 @@ export type GiftAidTotals = {
 };
 
 /**
- * Declarations that still count. A voided sale's declaration is left out. A declaration
- * whose sale hasn't reached this phone yet still counts: it was made when the money was taken.
+ * Claim rows must match a live sale and its donation. Wait for the sale to arrive
+ * if the declaration and sale snapshots reach this phone separately.
  */
 export function liveDeclarations(sales: Sale[], declarations: GiftAidDeclaration[]): GiftAidDeclaration[] {
   const byId = new Map(sales.map((s) => [s.id, s]));
-  return declarations.filter((d) => !byId.get(d.saleId)?.voided).sort((a, b) => a.at - b.at);
+  return declarations.filter((d) => {
+    const sale = byId.get(d.saleId);
+    return sale && !sale.voided && !d.pendingSync && d.amount > 0 && d.amount === donationIn(sale)
+      && (!sale.createdBy || !d.createdBy || sale.createdBy === d.createdBy);
+  }).sort((a, b) => a.at - b.at);
 }
 
 export function giftAidTotals(sales: Sale[], declarations: GiftAidDeclaration[]): GiftAidTotals {
@@ -119,7 +124,6 @@ const ddmmyy = (ms: number) => {
  * donation, ready to paste into the claim spreadsheet.
  */
 export function giftAidCsv(sales: Sale[], declarations: GiftAidDeclaration[]): string {
-  const esc = (v: string) => `"${v.replace(/"/g, '""')}"`;
   const rows = [['Title', 'First name or initial', 'Last name', 'House name or number', 'Postcode', 'Aggregated donations', 'Sponsored event', 'Donation date', 'Amount']];
   const saleAt = new Map(sales.map((s) => [s.id, s.at]));
   for (const d of liveDeclarations(sales, declarations)) {
@@ -128,5 +132,5 @@ export function giftAidCsv(sales: Sale[], declarations: GiftAidDeclaration[]): s
     const donated = saleAt.get(d.saleId) ?? d.donatedAt ?? d.at;
     rows.push(['', d.firstName, d.lastName, d.house, d.postcode, '', '', ddmmyy(donated), (d.amount / 100).toFixed(2)]);
   }
-  return rows.map((r) => r.map(esc).join(',')).join('\n');
+  return rows.map((r) => r.map(csvCell).join(',')).join('\n');
 }

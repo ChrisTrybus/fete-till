@@ -5,6 +5,7 @@ import { Row, Stat } from '@/components/figures';
 import { GiftAidPrompt } from '@/components/gift-aid';
 import { Body, Button, Card, Heading, Label, s, useTheme } from '@/components/ui';
 import { cashToCount } from '@/lib/floats';
+import { getCloud } from '@/lib/firebase';
 import { donationIn, giftAidCsv, giftAidTotals, SMALL_DONATION_MAX } from '@/lib/giftaid';
 import { formatPence } from '@/lib/money';
 import { sharePdf } from '@/lib/share-pdf';
@@ -17,6 +18,7 @@ import type { Sale } from '@/lib/types';
 export default function DayTotal() {
   const t = useTheme();
   const { sales, setVoided, session, parked, isOrganiser, deviceId, floats, giftAid } = useStore();
+  const memberUid = session?.mode === 'cloud' ? getCloud()?.auth.currentUser?.uid : undefined;
   const declarations = useMemo(() => Object.values(giftAid), [giftAid]);
   // Whether the organiser has turned Gift Aid declarations on for the event.
   const giftAidOn = session?.giftAidOver != null;
@@ -210,7 +212,8 @@ export default function DayTotal() {
                 {giftAid[sale.id] ? ' · Gift Aid' : ''}
               </Text>
               {/* A donor who said no at the till, or came back later, can still Gift Aid it. */}
-              {giftAidOn && !sale.voided && !giftAid[sale.id] && sale.deviceId === deviceId && donationIn(sale) > 0 && (
+              {giftAidOn && !sale.voided && !giftAid[sale.id] && sale.deviceId === deviceId
+                && (!sale.createdBy || sale.createdBy === memberUid) && donationIn(sale) > 0 && (
                 <Pressable accessibilityRole="button" hitSlop={8} onPress={() => setGiftAidFor(sale)}>
                   <Text style={{ color: t.accent, fontWeight: '700' }}>Add Gift Aid</Text>
                 </Pressable>

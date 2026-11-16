@@ -97,8 +97,13 @@ describe('Gift Aid', () => {
     expect(isOpenDonation({ price: 0 })).toBe(false);
   });
 
-  test('a declaration whose sale hasn’t arrived yet still counts', () => {
-    expect(giftAidTotals([], [declaration('elsewhere')])).toMatchObject({ declared: 500, count: 1 });
+  test('a declaration counts only after its matching donation arrives', () => {
+    expect(giftAidTotals([], [declaration('a')])).toMatchObject({ declared: 0, count: 0 });
+    expect(giftAidTotals([sale('a')], [declaration('a')])).toMatchObject({ declared: 500, count: 1 });
+    expect(giftAidTotals([sale('a')], [declaration('a', { amount: 501 })])).toMatchObject({ declared: 0, count: 0 });
+    expect(giftAidTotals([sale('a')], [declaration('a', { pendingSync: true })])).toMatchObject({ declared: 0, count: 0 });
+    expect(giftAidTotals([sale('a', { createdBy: 'till-a' })], [declaration('a', { createdBy: 'till-b' })]))
+      .toMatchObject({ declared: 0, count: 0 });
   });
 
   test('the export follows HMRC’s schedule columns, one row per live declaration', () => {
@@ -115,10 +120,8 @@ describe('Gift Aid', () => {
     const nextDay = AT + 24 * 60 * 60 * 1000;
     // The sale is on this phone: its date is used.
     expect(giftAidCsv([sale('a')], [declaration('a', { at: nextDay, donatedAt: AT })]).split('\n')[1]).toContain('"20/06/26"');
-    // The sale hasn't arrived yet: the donation date saved with the declaration is used.
-    expect(giftAidCsv([], [declaration('a', { at: nextDay, donatedAt: AT })]).split('\n')[1]).toContain('"20/06/26"');
-    // An older declaration saved without one falls back to when it was made.
-    expect(giftAidCsv([], [declaration('a', { at: nextDay })]).split('\n')[1]).toContain('"21/06/26"');
+    // Out-of-order snapshots don't create claim rows until both records are present.
+    expect(giftAidCsv([], [declaration('a', { at: nextDay, donatedAt: AT })]).split('\n')).toHaveLength(1);
   });
 
   test('the end-of-day summary gives the Gift Aid totals but no donor’s details', () => {
