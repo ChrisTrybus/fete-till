@@ -1,7 +1,7 @@
 import { activateKeepAwakeAsync, deactivateKeepAwake } from 'expo-keep-awake';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { Alert, KeyboardAvoidingView, Modal, Platform, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { GiftAidPrompt } from '@/components/gift-aid';
 import { Body, Button, Card, Field, Heading, Label, s, useTheme } from '@/components/ui';
 import { groupByCategory, tileColours } from '@/lib/categories';
@@ -9,7 +9,7 @@ import { donationIn, isOpenDonation, offersGiftAid, roundUpBy } from '@/lib/gift
 import { saleFeedback, tapFeedback } from '@/lib/haptics';
 import { CASH_BUTTONS, cashLabel, formatPence, parsePounds } from '@/lib/money';
 import { useStore } from '@/lib/store';
-import { openSumup, sumupAvailable } from '@/lib/sumup-open';
+import { openSumup, openSumupStore, sumupAvailable, SumupNotInstalledError } from '@/lib/sumup-open';
 import { soldOnTill } from '@/lib/tills';
 import type { Item, Sale, SaleLine } from '@/lib/types';
 
@@ -33,6 +33,8 @@ export default function Till() {
     clearCardResult,
   } = useStore();
   // Card payments go through the SumUp app when this phone is set up for it; otherwise the Card button just records the sale.
+  // A cash-only till has no Card button at all.
+  const cashOnly = cardMode === 'none';
   const viaSumup = cardMode === 'sumup' && sumupAvailable;
   // What this till sells. Anything it has run out of is tucked away below the rest.
   const tillName = session?.tillName ?? '';
@@ -157,7 +159,15 @@ export default function Till() {
       // SumUp never opened, so nothing can have been charged.
       settlePendingCard(false);
       clearCardResult();
-      setLastMessage(e instanceof Error ? e.message : 'Couldn’t open the SumUp app.');
+      const message = e instanceof Error ? e.message : 'Couldn’t open the SumUp app.';
+      setLastMessage(message);
+      if (e instanceof SumupNotInstalledError) {
+        // Make it obvious, and offer the store, rather than leave the tap looking like it did nothing.
+        Alert.alert('SumUp isn’t installed', message, [
+          { text: 'Not now', style: 'cancel' },
+          { text: 'Get SumUp', onPress: () => void openSumupStore().catch(() => setLastMessage('Couldn’t open the app store.')) },
+        ]);
+      }
     }
   };
 
@@ -415,7 +425,9 @@ export default function Till() {
       </View>
 
       <View style={{ flexDirection: 'row', gap: 8 }}>
-        <Button title={viaSumup ? 'SumUp' : 'Card'} disabled={!total || Boolean(pendingCard)} onPress={() => complete('card')} style={{ flex: 1 }} />
+        {!cashOnly && (
+          <Button title={viaSumup ? 'SumUp' : 'Card'} disabled={!total || Boolean(pendingCard)} onPress={() => complete('card')} style={{ flex: 1 }} />
+        )}
         <Button
           title={total && !tendered ? 'Enter cash' : 'Complete cash sale'}
           kind="primary"

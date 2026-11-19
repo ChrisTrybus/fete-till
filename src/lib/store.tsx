@@ -52,7 +52,8 @@ type Persisted = {
   cardResult: CardResult | null;
 };
 
-export type CardMode = 'record' | 'sumup';
+/** How this phone takes cards: not at all, recorded after an outside reader, or through the SumUp app. */
+export type CardMode = 'none' | 'record' | 'sumup';
 
 export type SyncStatus = 'local' | 'synced' | 'sending' | 'waiting' | 'attention';
 
@@ -229,7 +230,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             .some((op) => op.kind === 'giftAid' && op.declaration.saleId === id);
           return [id, pending ? { ...declaration, pendingSync: true } : declaration];
         })),
-        cardMode: saved.cardMode === 'sumup' ? 'sumup' : 'record',
+        cardMode: saved.cardMode === 'sumup' || saved.cardMode === 'none' ? saved.cardMode : 'record',
         pendingCard: saved.pendingCard ?? null,
         cardResult: saved.cardResult ?? null,
       };

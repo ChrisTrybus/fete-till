@@ -51,3 +51,7 @@ firestore-debug.log*
 ui-debug.log*
 database-debug.log*
 pubsub-debug.log*
+
+# local-only files: functions env settings and personal preview config
+functions/.env.cash-tin
+.claude/launch.json

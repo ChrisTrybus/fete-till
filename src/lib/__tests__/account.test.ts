@@ -5,7 +5,7 @@
  * Firebase Auth and the Google/Apple sign-ins are replaced with fakes.
  */
 import * as FirebaseAuth from 'firebase/auth';
-import { accountErrorMessage, AccountError, isCancelled } from '../account-errors';
+import { accountErrorMessage, AccountError, isCancelled, providerErrorMessage } from '../account-errors';
 import * as Providers from '../account-providers';
 import {
   createEmailAccount,
@@ -141,6 +141,21 @@ describe('error messages', () => {
     expect(accountErrorMessage({ code: 'auth/network-request-failed' })).toMatch('signal');
     expect(accountErrorMessage(new AccountError('Do this.'))).toBe('Do this.');
     expect(accountErrorMessage(new Error('weird'))).toBe('Signing in didn’t work. Try again.');
+  });
+
+  it('never blames an email and password when Google or Apple sign-in is refused', () => {
+    const refused = Object.assign(
+      new Error('Firebase: The audience in ID Token [x] does not match the expected audience. (auth/invalid-credential).'),
+      { code: 'auth/invalid-credential' },
+    );
+    const message = providerErrorMessage(refused, 'apple');
+    expect(message).toMatch('with Apple');
+    expect(message).toMatch('does not match the expected audience');
+    expect(message).not.toMatch('email and password don’t match');
+    expect(providerErrorMessage(Object.assign(new Error('Firebase: Error (auth/invalid-credential).'), { code: 'auth/invalid-credential' }), 'google')).toBe(
+      'Cash Tin couldn’t sign you in with Google. Try again later, or use email and password.',
+    );
+    expect(providerErrorMessage({ code: 'ERR_REQUEST_CANCELED' }, 'apple')).toBeNull();
   });
 
   it('shows the Cash Tin server’s own words, unless it fell over', () => {

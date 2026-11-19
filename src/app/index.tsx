@@ -19,8 +19,8 @@ export default function Welcome() {
   const [sharing, setSharing] = useState<'local' | 'cloud'>('local');
   const [priceList, setPriceList] = useState<'last' | 'starter'>('last');
   const [busy, setBusy] = useState<'create' | 'join' | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [needsPack, setNeedsPack] = useState<NeedsPack['reason'] | null>(null);
+  // Shown under the button that failed, so it is in view.
+  const [error, setError] = useState<{ kind: 'create' | 'join'; message: string } | null>(null);
   const { account } = useAccount();
   const credits = useCredits(account?.uid ?? null);
 
@@ -38,16 +38,23 @@ export default function Welcome() {
   const items = lastItems && priceList === 'last' ? lastItems : undefined; // undefined: the starter list
   const shared = store.cloudEnabled && sharing === 'cloud';
 
+  // A pack is spent from an account, so with packs on sale a signed-out organiser goes
+  // straight to the Account screen rather than waiting for the server to say so.
+  const needsSignIn = shared && purchasesAvailable && !account;
+
   async function run(kind: 'create' | 'join', fn: () => Promise<void>) {
     setBusy(kind);
     setError(null);
-    setNeedsPack(null);
     try {
       await fn();
     } catch (e) {
-      if (e instanceof NeedsPack) setNeedsPack(e.reason);
+      // The server wants an account, or a pack on it: the Account screen sorts out either.
+      if (e instanceof NeedsPack) {
+        router.push({ pathname: '/account', params: { reason: e.reason } });
+        return;
+      }
       const msg = e instanceof Error ? e.message : String(e);
-      setError(msg === 'timeout' ? 'Couldn’t reach the server. Check you have signal, then try again.' : msg);
+      setError({ kind, message: msg === 'timeout' ? 'Couldn’t reach the server. Check you have signal, then try again.' : msg });
     } finally {
       setBusy(null);
     }
@@ -98,12 +105,13 @@ export default function Welcome() {
               title={busy === 'create' ? 'Creating…' : 'Start event'}
               kind="primary"
               disabled={!eventName.trim() || busy !== null}
-              onPress={() =>
-                shared
-                  ? run('create', () => store.createCloudEvent(eventName.trim(), till, items))
-                  : store.startLocalEvent(eventName.trim(), till, items)
-              }
+              onPress={() => {
+                if (needsSignIn) router.push({ pathname: '/account', params: { reason: 'sign-in' } });
+                else if (shared) run('create', () => store.createCloudEvent(eventName.trim(), till, items));
+                else store.startLocalEvent(eventName.trim(), till, items);
+              }}
             />
+            {error?.kind === 'create' && <Text style={{ color: t.danger, fontWeight: '700' }}>{error.message}</Text>}
             <Body muted>
               {shared
                 ? 'Needs signal to start. After that each till keeps selling without it.'
@@ -112,7 +120,7 @@ export default function Welcome() {
             {shared && purchasesAvailable && (
               <Body muted>
                 {!account
-                  ? 'Uses an event pack. Sign in on the Account screen to buy one or use yours.'
+                  ? 'Uses an event pack. You’ll sign in to your account next, to buy one or use yours.'
                   : credits && credits.credits > 0
                     ? `Uses 1 of the ${credits.credits} ${credits.credits === 1 ? 'event' : 'events'} left on your account.`
                     : 'Uses an event pack. Your account has none left: buy one on the Account screen.'}
@@ -137,17 +145,10 @@ export default function Welcome() {
               disabled={!store.cloudEnabled || code.trim().length < 6 || busy !== null}
               onPress={() => run('join', () => store.joinCloudEvent(code, till))}
             />
+            {error?.kind === 'join' && <Text style={{ color: t.danger, fontWeight: '700' }}>{error.message}</Text>}
             {!store.cloudEnabled && <Body muted>Sync isn’t set up in this build, so events can’t be joined.</Body>}
           </Card>
 
-          {error && <Text style={{ color: t.danger, fontWeight: '700' }}>{error}</Text>}
-          {needsPack && (
-            <Button
-              title={needsPack === 'sign-in' ? 'Sign in' : 'Get an event pack'}
-              kind="primary"
-              onPress={() => router.push('/account')}
-            />
-          )}
 
           <Button title="Past events" onPress={() => router.push('/history')} />
           {store.cloudEnabled && <Button title="Account" onPress={() => router.push('/account')} />}
