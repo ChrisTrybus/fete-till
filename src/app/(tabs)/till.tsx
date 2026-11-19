@@ -133,11 +133,9 @@ export default function Till() {
     setGiftAidOffer(null);
     setLastMessage(out ? `${it.name} is out of stock, so it’s hidden.` : `${it.name} is back in stock.`);
   };
-  // A SumUp payment has finished: on success the sale is already recorded, so clear the
-  // cart; on failure keep it, to try again or take cash instead.
+  // Clear the cart after the volunteer records payment. Keep it if they cancel.
   useEffect(() => {
     if (!cardResult) return;
-    // The result comes from outside the app (SumUp, through the return link), and is handled once, then cleared.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setLastMessage(cardResult.message);
     const sale = cardResult.ok ? sales[cardResult.id] : undefined;
@@ -512,10 +510,7 @@ export default function Till() {
 }
 
 /**
- * Covers the till while a card payment is with the SumUp app, so the same sale can't be
- * taken twice. SumUp normally brings the volunteer back and this closes by itself. If it
- * doesn't (the phone closed this app, or the volunteer came back by hand), they check
- * the SumUp app and say what happened.
+ * Covers the till until the volunteer checks the charge in SumUp and records its outcome.
  */
 function PendingCardPrompt() {
   const { pendingCard, settlePendingCard } = useStore();
@@ -529,8 +524,7 @@ function PendingCardPrompt() {
             <Heading>Card payment of {formatPence(pending.total)}</Heading>
             <Body>Take the card in the SumUp app. You’ll come back here when it’s done.</Body>
             <Body muted>
-              If SumUp didn’t bring you back, open the SumUp app and check its sales history, then say whether this payment went
-              through.
+              Check this payment in the SumUp app’s sales history before recording whether it went through.
             </Body>
             <View style={{ flexDirection: 'row', gap: 8 }}>
               <Button

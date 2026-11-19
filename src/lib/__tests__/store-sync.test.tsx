@@ -66,7 +66,7 @@ const goOffline = () => {
 };
 const goOnline = () => {
   cloud.pushOp.mockResolvedValue(undefined);
-  cloud.joinAsMember.mockResolvedValue(undefined);
+  cloud.joinAsMember.mockImplementation(async (_eventId, _code, _tillName, till) => ({ float: till.float ?? 0, uid: 'phone-uid' }));
 };
 
 async function sell(method: 'cash' | 'card' = 'cash') {
@@ -131,6 +131,28 @@ describe('with signal', () => {
     expect(store.outbox).toHaveLength(0);
     expect(store.syncStatus).toBe('synced');
   });
+
+  test('sales queued after switching events sync to the current event', async () => {
+    await launchInCloudEvent();
+    let completeFirstWrite!: () => void;
+    cloud.pushOp.mockImplementationOnce(() => new Promise<void>((resolve) => {
+      completeFirstWrite = resolve;
+    }));
+    const first = await sell();
+    await act(() => store.leaveEvent());
+    cloud.joinEvent.mockResolvedValueOnce({
+      eventId: 'ev2', code: 'BCD234', eventName: 'Autumn Fair', items: [], float: 0, giftAidOver: null,
+    });
+    await act(() => store.joinCloudEvent('BCD234', 'Tea stall'));
+    const second = await sell();
+    await act(async () => completeFirstWrite());
+
+    expect(cloud.pushOp.mock.calls).toEqual([
+      ['ev1', { kind: 'sale', sale: first }],
+      ['ev2', { kind: 'sale', sale: second }],
+    ]);
+    expect(store.outbox).toHaveLength(0);
+  });
 });
 
 describe('a whole session with no signal', () => {
@@ -184,7 +206,7 @@ describe('a whole session with no signal', () => {
     const [a, b, c] = [await sell(), await sell(), await sell()];
 
     cloud.pushOp.mockClear();
-    cloud.joinAsMember.mockResolvedValue(undefined);
+    cloud.joinAsMember.mockResolvedValue({ float: 0, uid: 'phone-uid' });
     cloud.pushOp.mockResolvedValueOnce(undefined).mockRejectedValueOnce(new Error('timeout'));
     await settle(15_000);
 
@@ -252,7 +274,7 @@ describe('the app is killed with unsent sales', () => {
     await settle(15_000);
 
     // A restart may bring a new anonymous user, so the till re-joins before sending.
-    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 0 });
+    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId });
     expect(pushedOps().map(opKey)).toEqual([`sale:${a.id}`, `sale:${b.id}`, `void:${a.id}`]);
     expect(store.outbox).toHaveLength(0);
     expect(store.syncStatus).toBe('synced');
@@ -845,7 +867,7 @@ describe('tills and stock', () => {
     const firstRun = await launchInCloudEvent();
     await act(async () =>
       onRemoteMembers([
-        { deviceId: store.deviceId, tillName: 'Cake stall', float: 0 },
+        { deviceId: store.deviceId, isLocal: true, tillName: 'Cake stall', float: 0 },
         { deviceId: 'other', tillName: 'Tombola', float: 0 },
       ]),
     );
@@ -871,7 +893,7 @@ describe('tills and stock', () => {
     // The server's copy of this phone's float is not added on top of its own.
     await act(async () =>
       onRemoteMembers([
-        { deviceId: store.deviceId, tillName: 'Cake stall', float: 2000 },
+        { deviceId: store.deviceId, isLocal: true, tillName: 'Cake stall', float: 2000 },
         { deviceId: 'other', tillName: 'Tombola', float: 1500 },
       ]),
     );
@@ -896,7 +918,7 @@ describe('tills and stock', () => {
     expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Cake stall', { deviceId: store.deviceId, float: 2500 });
   });
 
-  test('a phone that rejoins an event gets its float back and tells the other tills again', async () => {
+  test('a phone that rejoins uses the float returned by the server registration', async () => {
     await launch();
     cloud.joinEvent.mockResolvedValue({ eventId: 'ev1', code: 'ABC234', eventName: 'Summer Fete', items: [], float: 1500, giftAidOver: null });
 
@@ -906,7 +928,7 @@ describe('tills and stock', () => {
     expect(cloud.joinEvent).toHaveBeenCalledWith('ABC234', 'Tombola', store.deviceId);
     expect(store.session?.float).toBe(1500);
     expect(store.floats).toEqual([{ tillName: 'Tombola', float: 1500 }]);
-    expect(cloud.joinAsMember).toHaveBeenLastCalledWith('ev1', 'ABC234', 'Tombola', { deviceId: store.deviceId, float: 1500 });
+    expect(cloud.joinAsMember).not.toHaveBeenCalled();
   });
 
   test('floats are saved with the event when the phone leaves it', async () => {
@@ -1057,7 +1079,8 @@ describe('Gift Aid', () => {
     const declaration = store.giftAid[sale.id];
     expect(declaration).toMatchObject({ saleId: sale.id, amount: 500, firstName: 'Ada', postcode: 'SW1A 1AA', tillName: 'Cake stall', donatedAt: sale.at });
     expect(pushedOps().map(opKey)).toEqual([`sale:${sale.id}`, 'giftAid']);
-    expect(cloud.pushOp).toHaveBeenLastCalledWith('ev1', { kind: 'giftAid', declaration });
+    expect(cloud.pushOp).toHaveBeenLastCalledWith('ev1', { kind: 'giftAid', declaration: { ...declaration, pendingSync: true } });
+    expect(declaration.pendingSync).toBe(false);
     expect(store.outbox).toHaveLength(0);
   });
 
@@ -1164,9 +1187,6 @@ describe('Gift Aid', () => {
 });
 
 describe('card payments through SumUp', () => {
-  const paid = (id: string | null, txCode = 'TX1') => ({ ok: true, id, txCode, message: 'Card payment taken.' });
-  const declined = (id: string) => ({ ok: false, id, txCode: null, message: 'Card declined.' });
-
   async function begin() {
     let pending!: ReturnType<typeof store.beginCardPayment>;
     await act(async () => {
@@ -1175,78 +1195,32 @@ describe('card payments through SumUp', () => {
     return pending;
   }
 
-  test('nothing is recorded until SumUp says it was paid, then the sale takes the payment’s id', async () => {
-    await launchInCloudEvent();
-    const pending = await begin();
-    expect(store.pendingCard).toMatchObject({ id: pending.id, total: 160 });
-    expect(Object.keys(store.sales)).toHaveLength(0);
-
-    await act(async () => store.finishCardPayment(paid(pending.id)));
-    await settle();
-
-    expect(store.sales[pending.id]).toMatchObject({ method: 'card', total: 160, tendered: 160, cardRef: 'TX1' });
-    expect(store.pendingCard).toBeNull();
-    expect(store.cardResult).toMatchObject({ ok: true, message: 'Card payment of £1.60 taken.' });
-    expect(pushedOps().map(opKey)).toEqual([`sale:${pending.id}`]);
-  });
-
-  test('a declined card records nothing and says nothing was charged', async () => {
-    await launchInCloudEvent();
-    const pending = await begin();
-    await act(async () => store.finishCardPayment(declined(pending.id)));
-
-    expect(store.sales).toEqual({});
-    expect(store.pendingCard).toBeNull();
-    expect(store.cardResult).toMatchObject({ ok: false, message: 'Card declined. Nothing was charged.' });
-  });
-
-  test('the same result arriving twice records one sale', async () => {
-    await launchInCloudEvent();
-    const pending = await begin();
-    await act(async () => store.finishCardPayment(paid(pending.id)));
-    await act(async () => store.finishCardPayment(paid(pending.id)));
-    await settle();
-
-    expect(Object.keys(store.sales)).toEqual([pending.id]);
-    expect(pushedOps()).toHaveLength(1);
-  });
-
-  test('a result for a payment this till wasn’t waiting for is not recorded', async () => {
-    await launchInCloudEvent();
-    const pending = await begin();
-    await act(async () => store.finishCardPayment(paid('someone-else')));
-
-    expect(store.sales).toEqual({});
-    expect(store.pendingCard?.id).toBe(pending.id); // still waiting for its own result
-    expect(store.cardResult?.message).toMatch(/wasn’t waiting for/);
-  });
-
-  test('the phone closing this app while SumUp is open loses nothing: the result still records the sale', async () => {
+  test('a pending payment survives restart and is recorded once after manual confirmation', async () => {
     const firstRun = await launchInCloudEvent();
     const pending = await begin();
+    expect(store.sales).toEqual({});
     await firstRun.unmount();
 
     await launch();
     expect(store.pendingCard?.id).toBe(pending.id);
-    await act(async () => store.finishCardPayment(paid(pending.id)));
-    expect(store.sales[pending.id]).toMatchObject({ lines: TEA, method: 'card' });
+    await act(async () => store.settlePendingCard(true));
+    await act(async () => store.settlePendingCard(true));
+    await settle();
+
+    expect(store.sales[pending.id]).toMatchObject({ lines: TEA, method: 'card', cardUnconfirmed: true });
+    expect(store.pendingCard).toBeNull();
+    expect(pushedOps().map(opKey)).toEqual([`sale:${pending.id}`]);
   });
 
-  test('if SumUp never reports back, the volunteer can settle it by hand either way', async () => {
+  test('manual cancellation clears the pending payment and records no sale', async () => {
     await launchInCloudEvent();
-    const first = await begin();
-    await act(async () => store.settlePendingCard(true));
-    expect(store.sales[first.id]).toMatchObject({ method: 'card', cardUnconfirmed: true });
-    expect(store.sales[first.id].cardRef).toBeUndefined();
-
-    const second = await begin();
+    await begin();
     await act(async () => store.settlePendingCard(false));
-    expect(store.sales[second.id]).toBeUndefined();
-    expect(store.pendingCard).toBeNull();
+    await settle();
 
-    // A late result for the payment settled by hand changes nothing.
-    await act(async () => store.finishCardPayment(paid(first.id)));
-    expect(Object.keys(store.sales)).toEqual([first.id]);
+    expect(store.sales).toEqual({});
+    expect(store.pendingCard).toBeNull();
+    expect(pushedOps()).toHaveLength(0);
   });
 
   test('the card setting is kept on this phone across events and restarts', async () => {

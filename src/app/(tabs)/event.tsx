@@ -197,7 +197,7 @@ export default function EventScreen() {
             <Choice<CardMode>
               options={[
                 { value: 'record', title: 'Record only', detail: 'Take the card on your own reader, then tap Card.' },
-                { value: 'sumup', title: 'SumUp app', detail: 'The till opens SumUp with the amount and records the sale when it’s paid.' },
+                { value: 'sumup', title: 'SumUp app', detail: 'Take the payment in SumUp, then confirm the result on the till.' },
               ]}
               value={cardMode}
               onChange={setCardMode}

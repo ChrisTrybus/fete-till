@@ -6,16 +6,16 @@ const session: Session = { eventId: 'fete', eventName: 'Summer Fete', code: 'ABC
 
 describe('opening floats', () => {
   test('a this-phone-only event has just this till’s float', () => {
-    expect(tillFloats({ ...session, mode: 'local' }, 'me', [{ deviceId: 'x', tillName: 'Tombola', float: 500 }])).toEqual([
+    expect(tillFloats({ ...session, mode: 'local' }, [{ deviceId: 'x', tillName: 'Tombola', float: 500 }])).toEqual([
       { tillName: 'Cake stall', float: 2000 },
     ]);
-    expect(tillFloats({ ...session, mode: 'local', float: undefined }, 'me', [])).toEqual([]);
-    expect(tillFloats(null, 'me', [])).toEqual([]);
+    expect(tillFloats({ ...session, mode: 'local', float: undefined }, [])).toEqual([]);
+    expect(tillFloats(null, [])).toEqual([]);
   });
 
   test('in a shared event, this phone’s own figure replaces the server’s copy of it', () => {
-    const floats = tillFloats(session, 'me', [
-      { deviceId: 'me', tillName: 'Cake stall', float: 500 }, // stale: changed on this phone since
+    const floats = tillFloats(session, [
+      { deviceId: 'me', isLocal: true, tillName: 'Cake stall', float: 500 }, // stale: changed on this phone since
       { deviceId: 'a', tillName: 'Tombola', float: 1500 },
       { deviceId: 'b', tillName: 'Plants', float: 0 },
     ]);
@@ -25,25 +25,21 @@ describe('opening floats', () => {
     ]);
   });
 
-  test('a phone whose sign-in changed is counted once, by its latest registration', () => {
-    const floats = tillFloats(session, 'me', [
-      { deviceId: 'a', tillName: 'Tombola', float: 1500, joinedAt: 100 },
-      { deviceId: 'a', tillName: 'Tombola', float: 2500, joinedAt: 300 }, // same phone, new sign-in, float corrected
-      { deviceId: 'me', tillName: 'Cake stall', float: 2000, joinedAt: 100 },
-      { deviceId: 'me', tillName: 'Cake stall', float: 2000, joinedAt: 200 },
-      { deviceId: '', tillName: 'Plants', float: 500 }, // registered before floats carried a device id
-      { deviceId: '', tillName: 'Books', float: 700 },
+  test('distinct members count independently even when their client device IDs match', () => {
+    const floats = tillFloats(session, [
+      { deviceId: 'me', isLocal: true, tillName: 'Cake stall', float: 2000 },
+      { deviceId: 'me', tillName: 'Tombola', float: 1500, joinedAt: 300 },
+      { deviceId: 'me', tillName: 'Plants', float: 500, joinedAt: 500 },
     ]);
     expect(floats).toEqual([
       { tillName: 'Cake stall', float: 2000 },
+      { tillName: 'Tombola', float: 1500 },
       { tillName: 'Plants', float: 500 },
-      { tillName: 'Books', float: 700 },
-      { tillName: 'Tombola', float: 2500 },
     ]);
   });
 
   test('two phones on one till are added together', () => {
-    expect(tillFloats(session, 'me', [{ deviceId: 'a', tillName: ' cake stall', float: 1000 }])).toEqual([{ tillName: 'Cake stall', float: 3000 }]);
+    expect(tillFloats(session, [{ deviceId: 'a', tillName: ' cake stall', float: 1000 }])).toEqual([{ tillName: 'Cake stall', float: 3000 }]);
   });
 
   test('each tin should hold its float plus the cash it took', () => {
