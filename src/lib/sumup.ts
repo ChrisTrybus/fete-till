@@ -60,3 +60,10 @@ export function sumupLink(i: SumupLinkInput): string {
   ];
   return `sumupmerchant://pay/1.0?${params.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join('&')}`;
 }
+
+/** Where to install the SumUp app: the store app first, then the store's web page if that can't open. */
+export function sumupStoreLinks(platform: 'ios' | 'android'): [string, string] {
+  return platform === 'ios'
+    ? ['itms-apps://apps.apple.com/app/id514879214', 'https://apps.apple.com/app/id514879214']
+    : ['market://details?id=com.kaching.merchant', 'https://play.google.com/store/apps/details?id=com.kaching.merchant'];
+}

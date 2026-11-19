@@ -3,7 +3,7 @@
 import Constants from 'expo-constants';
 import * as Linking from 'expo-linking';
 import { Platform } from 'react-native';
-import { SUMUP_CALLBACK_PATH, sumupLink } from './sumup';
+import { SUMUP_CALLBACK_PATH, sumupLink, sumupStoreLinks } from './sumup';
 
 // Must be read as written here: Expo inlines EXPO_PUBLIC_ variables at build time.
 const AFFILIATE_KEY = process.env.EXPO_PUBLIC_SUMUP_AFFILIATE_KEY ?? '';
@@ -18,6 +18,24 @@ export const sumupUnavailableReason = (): string | null =>
     : !AFFILIATE_KEY.trim()
       ? 'This version of the app hasn’t been set up for SumUp yet.'
       : null;
+
+/** Thrown when the SumUp app couldn't be opened, which almost always means it isn't installed. */
+export class SumupNotInstalledError extends Error {
+  constructor() {
+    super('The SumUp app isn’t on this phone. Install it and log in to your stall’s SumUp account, then try again.');
+    this.name = 'SumupNotInstalledError';
+  }
+}
+
+/** Opens the App Store or Play Store at the SumUp app. */
+export async function openSumupStore() {
+  const [store, web] = sumupStoreLinks(Platform.OS === 'ios' ? 'ios' : 'android');
+  try {
+    await Linking.openURL(store);
+  } catch {
+    await Linking.openURL(web);
+  }
+}
 
 /** Opens the SumUp app to take `total` pence. Rejects with a readable message if it can't be opened. */
 export async function openSumup(payment: { id: string; total: number; title: string }) {
@@ -34,6 +52,6 @@ export async function openSumup(payment: { id: string; total: number; title: str
   try {
     await Linking.openURL(url);
   } catch {
-    throw new Error('Couldn’t open the SumUp app. Check it is installed and you are logged in.');
+    throw new SumupNotInstalledError();
   }
 }

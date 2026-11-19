@@ -1233,4 +1233,13 @@ describe('card payments through SumUp', () => {
     await launch();
     expect(store.cardMode).toBe('sumup');
   });
+
+  test('a cash-only phone stays cash-only after a restart', async () => {
+    const firstRun = await launch();
+    await act(async () => store.setCardMode('none'));
+    await firstRun.unmount();
+
+    await launch();
+    expect(store.cardMode).toBe('none');
+  });
 });

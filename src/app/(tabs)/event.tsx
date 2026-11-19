@@ -192,26 +192,25 @@ export default function EventScreen() {
 
       <Card>
         <Label>Card payments</Label>
-        {sumupAvailable ? (
-          <>
-            <Choice<CardMode>
-              options={[
-                { value: 'record', title: 'Record only', detail: 'Take the card on your own reader, then tap Card.' },
-                { value: 'sumup', title: 'SumUp app', detail: 'Take the payment in SumUp, then confirm the result on the till.' },
-              ]}
-              value={cardMode}
-              onChange={setCardMode}
-            />
-            {cardMode === 'sumup' && (
-              <Body muted>
-                Install the SumUp app on this phone and log in to your stall’s SumUp account. Payments go straight to that account.
-                SumUp needs signal to take a card.
-              </Body>
-            )}
-          </>
-        ) : (
-          <Body muted>Take the card on your own reader, then tap Card to record the sale. {sumupUnavailableReason()}</Body>
-        )}
+        <Choice<CardMode>
+          options={[
+            { value: 'none', title: 'Cash only', detail: 'No card payments. The till hides the Card button.' },
+            { value: 'record', title: 'Record only', detail: 'Take the card on your own reader, then tap Card.' },
+            ...(sumupAvailable
+              ? [{ value: 'sumup' as const, title: 'SumUp app', detail: 'Take the payment in SumUp, then confirm the result on the till.' }]
+              : []),
+          ]}
+          value={cardMode === 'sumup' && !sumupAvailable ? 'record' : cardMode}
+          onChange={setCardMode}
+        />
+        {cardMode === 'sumup' && sumupAvailable ? (
+          <Body muted>
+            Install the SumUp app on this phone and log in to your stall’s SumUp account. Payments go straight to that account.
+            SumUp needs signal to take a card. If it isn’t installed, the till offers to open the app store.
+          </Body>
+        ) : !sumupAvailable ? (
+          <Body muted>{sumupUnavailableReason()}</Body>
+        ) : null}
       </Card>
 
       {isOrganiser ? (
