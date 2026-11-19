@@ -8,6 +8,12 @@
     "runtime": "nodejs22",
     "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"]
   },
+  "hosting": {
+    "public": "site",
+    "cleanUrls": true,
+    "trailingSlash": false,
+    "ignore": ["**/.*"]
+  },
   "emulators": {
     "auth": { "port": 9099 },
     "firestore": { "port": 8080 },
