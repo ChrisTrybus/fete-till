@@ -50,6 +50,25 @@ const MESSAGES: Record<string, string> = {
   PLAY_SERVICES_NOT_AVAILABLE: 'Google sign-in needs Google Play services on this phone.',
 };
 
+const PROVIDER_NAME = { google: 'Google', apple: 'Apple' } as const;
+
+/**
+ * What to show when Google or Apple sign-in fails. Firebase makes the account itself the
+ * first time, so an "invalid credential" here never means there's no account: it means
+ * Firebase refused the provider's token, which is a setup problem (the provider not set
+ * up in the Firebase project, or a client id or bundle id it doesn't know). Firebase's own
+ * reason is kept in the message so it can be reported and fixed.
+ */
+export function providerErrorMessage(e: unknown, provider: keyof typeof PROVIDER_NAME): string | null {
+  const code = codeOf(e);
+  if (code !== 'auth/invalid-credential' && code !== 'auth/invalid-login-credentials') return accountErrorMessage(e);
+  // Firebase's message reads "Firebase: <reason> (auth/code)." or "Firebase: Error (auth/code)." with no reason.
+  const raw = e instanceof Error ? e.message : '';
+  const detail = raw.replace(/^Firebase:\s*/, '').replace(/\s*\(auth\/[^)]*\)\.?\s*$/, '').trim();
+  const name = PROVIDER_NAME[provider];
+  return `Cash Tin couldn’t sign you in with ${name}. Try again later, or use email and password.${detail && detail !== 'Error' ? ` (${detail})` : ''}`;
+}
+
 /** A message to show for a failed sign-in or purchase, or null if the person cancelled it. */
 export function accountErrorMessage(e: unknown): string | null {
   if (isCancelled(e)) return null;

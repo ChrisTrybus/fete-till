@@ -1,4 +1,4 @@
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ActivityIndicator, KeyboardAvoidingView, Platform, ScrollView, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,6 +31,10 @@ export default function AccountScreen() {
   const t = useTheme();
   const store = useStore();
   const { ready, account } = useAccount();
+  // Set when Start event sent the organiser here because the event needs an account or a pack.
+  const { reason } = useLocalSearchParams<{ reason?: 'sign-in' | 'no-credits' }>();
+  const credits = useCredits(account?.uid ?? null);
+  const forEvent = reason === 'sign-in' || reason === 'no-credits';
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,6 +67,21 @@ export default function AccountScreen() {
             <Heading>Account</Heading>
             <Button title="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} style={{ paddingVertical: 8 }} />
           </View>
+
+          {forEvent && store.cloudEnabled && ready && (
+            <Card>
+              {!account ? (
+                <Body>Starting an event with several tills uses an event pack from your account. Sign in or create an account below.</Body>
+              ) : credits && credits.credits > 0 ? (
+                <>
+                  <Body>You’re ready to start your event.</Body>
+                  <Button title="Back to start event" kind="primary" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />
+                </>
+              ) : (
+                <Body>Starting an event with several tills uses an event pack. Buy one below.</Body>
+              )}
+            </Card>
+          )}
 
           {!store.cloudEnabled ? (
             <Card>

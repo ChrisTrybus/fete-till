@@ -6,7 +6,10 @@ import { act, fireEvent, render, screen } from '@testing-library/react-native';
 import AccountScreen from '../../app/account';
 import * as Packs from '../packs';
 
-jest.mock('expo-router', () => ({ router: { back: jest.fn(), canGoBack: () => true, replace: jest.fn() } }));
+jest.mock('expo-router', () => ({
+  router: { back: jest.fn(), canGoBack: () => true, replace: jest.fn() },
+  useLocalSearchParams: () => ({}),
+}));
 jest.mock('../store', () => ({ useStore: () => ({ cloudEnabled: true }) }));
 jest.mock('../../components/apple-button', () => ({ AppleButton: () => null }));
 jest.mock('../account', () => ({

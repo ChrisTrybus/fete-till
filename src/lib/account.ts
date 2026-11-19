@@ -18,7 +18,7 @@ import {
   type User,
 } from 'firebase/auth';
 import { useSyncExternalStore } from 'react';
-import { AccountError } from './account-errors';
+import { AccountError, providerErrorMessage } from './account-errors';
 import { availableProviders, connectProvider, signOutProviders, type Provider } from './account-providers';
 import { cloudEnabled, getAccountAuth } from './firebase';
 import { forgetBuyer } from './store-purchases';
@@ -102,9 +102,16 @@ function signedOut(a: Auth) {
 export async function signInWithProvider(provider: Provider): Promise<boolean> {
   const a = auth();
   signedOut(a);
-  const ok = await connectProvider(a, provider);
-  refresh();
-  return ok;
+  try {
+    return await connectProvider(a, provider);
+  } catch (e) {
+    const message = providerErrorMessage(e, provider);
+    if (message === null) throw e; // cancelled: nothing to show
+    console.warn(`${provider} sign-in failed`, e);
+    throw new AccountError(message);
+  } finally {
+    refresh();
+  }
 }
 
 const cleanEmail = (email: string) => email.trim();
