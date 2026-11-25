@@ -55,3 +55,6 @@ pubsub-debug.log*
 # local-only files: functions env settings and personal preview config
 functions/.env.cash-tin
 .claude/launch.json
+
+# Android Studio
+.idea/

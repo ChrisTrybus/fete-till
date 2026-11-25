@@ -1,8 +1,10 @@
-// Generates App Store featuring artwork (Header + Search Results) for Cash Tin.
+// Generates App Store featuring artwork (Header + Search Results) for Cash Tin, and the
+// Google Play feature graphic (rendered straight to ../play-store/out with Chrome/Edge).
 // Usage: node store-assets/app-store/generate.mjs  -> writes HTML, then render.sh screenshots them.
-import { writeFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -61,7 +63,7 @@ function confetti(W, H, n, seed, avoid) {
   let out = '';
   for (let i = 0; i < n; i++) {
     const x = r() * W, y = H * 0.28 + r() * H * 0.72;
-    if (avoid && Math.abs(x - avoid.x) < avoid.w && Math.abs(y - avoid.y) < avoid.h) continue;
+    if ([].concat(avoid ?? []).some((a) => Math.abs(x - a.x) < a.w && Math.abs(y - a.y) < a.h)) continue;
     const c = FLAGS[Math.floor(r() * FLAGS.length)];
     const s = 5 + r() * 9;
     const rot = r() * 180;
@@ -131,7 +133,7 @@ function centerpiece() {
 }
 
 function svg(W, H, opts) {
-  const { bunting, cpScale, cpY, confettiN } = opts;
+  const { bunting, cpScale, cpY, confettiN, cpX = W / 2, extra = '', avoid = [] } = opts;
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="100%" height="100%" preserveAspectRatio="none">
   <defs>
     <radialGradient id="bg" cx="50%" cy="58%" r="70%">
@@ -141,9 +143,9 @@ function svg(W, H, opts) {
     </radialGradient>
   </defs>
   <rect width="${W}" height="${H}" fill="url(#bg)"/>
-  ${confetti(W, H, confettiN, 7, { x: W / 2, y: cpY, w: 560 * cpScale, h: 300 * cpScale })}
+  ${confetti(W, H, confettiN, 7, [{ x: cpX, y: cpY, w: 560 * cpScale, h: 300 * cpScale }, ...avoid])}
   ${bunting}
-  <g transform="translate(${W / 2} ${cpY}) scale(${cpScale})">${centerpiece()}</g>
+  <g transform="translate(${cpX} ${cpY}) scale(${cpScale})">${centerpiece()}</g>${extra}
 </svg>`;
 }
 
@@ -178,4 +180,44 @@ svg{display:block;width:${PX_W}px;height:${PX_H}px}</style></head>
   writeFileSync(join(here, 'search-results.html'), page(W, H, 3840, 2560, body));
 }
 
-console.log('wrote header.html, search-results.html');
+// Google Play feature graphic: 1024 x 500. Design space 2048 x 1000.
+// Name and tagline on the left, tin on the right.
+{
+  const W = 2048, H = 1000;
+  const bunting =
+    swag(-60, 560, 30, 46, 5, 50, 0) +
+    swag(520, 1060, 30, 50, 5, 50, 2) +
+    swag(1020, 1560, 30, 48, 5, 50, 4) +
+    swag(1520, 2110, 30, 46, 5, 50, 1);
+  const extra = `<g font-family="'Segoe UI', system-ui, sans-serif" fill="#fff">
+    <text x="130" y="500" font-size="190" font-weight="800" letter-spacing="-4">Cash Tin</text>
+    <text x="136" y="610" font-size="62" font-weight="600" opacity=".9">The till for fetes, fairs</text>
+    <text x="136" y="690" font-size="62" font-weight="600" opacity=".9">and fundraisers</text>
+  </g>`;
+  // Keep confetti off the name and tagline.
+  const avoid = [{ x: 520, y: 560, w: 470, h: 230 }];
+  const body = svg(W, H, { bunting, cpScale: 0.92, cpX: 1480, cpY: 560, confettiN: 70, extra, avoid });
+  const playDir = join(here, '..', 'play-store');
+  mkdirSync(join(playDir, 'out'), { recursive: true });
+  const file = join(playDir, 'feature-graphic.html');
+  writeFileSync(file, page(W, H, 1024, 500, body));
+  const chrome = [
+    process.env.CHROME,
+    'C:/Program Files/Google/Chrome/Application/chrome.exe',
+    'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
+    '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    '/usr/bin/google-chrome',
+  ].find((p) => p && existsSync(p));
+  if (chrome) {
+    const png = join(playDir, 'out', 'feature-graphic-1024x500.png');
+    execFileSync(chrome, [
+      '--headless=new', '--disable-gpu', '--hide-scrollbars', '--force-device-scale-factor=1',
+      '--window-size=1024,500', `--screenshot=${png}`, pathToFileURL(file).href,
+    ], { stdio: 'ignore' });
+    console.log('wrote', png);
+  } else {
+    console.warn('No Chrome/Edge found (set CHROME=<path>); feature-graphic.html written but not rendered');
+  }
+}
+
+console.log('wrote header.html, search-results.html, ../play-store/feature-graphic.html');

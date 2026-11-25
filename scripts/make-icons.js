@@ -95,7 +95,7 @@ function artwork({ stringColour = CREAM, lastFlag = CREAM, mono = false } = {}) 
  * Renders layers to a PNG. `scale` shrinks the artwork around the centre (Android
  * adaptive icons only show the middle two-thirds). `background` null = transparent.
  */
-function render(file, size, { layers, background = null, scale = 1 }) {
+function render(file, size, { layers, background = null, scale = 1, alpha = !background }) {
   const SS = 4; // 4x4 samples per pixel for smooth edges
   const png = new PNG({ width: size, height: size });
   for (let py = 0; py < size; py++) {
@@ -125,8 +125,9 @@ function render(file, size, { layers, background = null, scale = 1 }) {
       png.data[i + 3] = Math.round((a / (SS * SS)) * 255);
     }
   }
-  // iOS rejects icons with an alpha channel, so opaque images are written as RGB.
-  const out = PNG.sync.write(png, background ? { colorType: 2, inputHasAlpha: true } : {});
+  // iOS rejects icons with an alpha channel, so opaque images are written as RGB
+  // unless `alpha` asks for RGBA (Google Play wants a 32-bit PNG).
+  const out = PNG.sync.write(png, alpha ? {} : { colorType: 2, inputHasAlpha: true });
   fs.writeFileSync(path.join(__dirname, '..', 'assets', file), out);
   console.log(`${file} ${size}x${size}`);
 }
@@ -137,3 +138,5 @@ render('android-icon-background.png', 1024, { layers: [], background: GREEN });
 render('android-icon-monochrome.png', 1024, { layers: artwork({ mono: true }), scale: 0.6 });
 render('splash-icon.png', 1024, { layers: artwork({ stringColour: STRING, lastFlag: GREEN }), scale: 0.94 });
 render('favicon.png', 48, { layers: artwork(), background: GREEN });
+// Google Play listing icon: square, full-bleed, 32-bit PNG; Play rounds the corners itself.
+render('../store-assets/play-store/out/play-icon-512x512.png', 512, { layers: artwork(), background: GREEN, alpha: true });
