@@ -7,15 +7,22 @@
 import { doc, onSnapshot } from 'firebase/firestore';
 import { httpsCallable } from 'firebase/functions';
 import { useEffect, useState } from 'react';
+import { Platform } from 'react-native';
 import { AccountError } from './account-errors';
 import { getAccountAuth, getAccountCloud } from './firebase';
 import { buyProduct, purchasesAvailable, storePrices } from './store-purchases';
 
 export { purchasesAvailable };
 
+/**
+ * The 1-event pack's product id. On Google Play it's cashtin_event_2: cashtin_event_1
+ * was deleted there, and Play never lets a deleted product id be used again.
+ */
+const ONE_EVENT_PACK = Platform.OS === 'android' ? 'cashtin_event_2' : 'cashtin_event_1';
+
 /** The packs on sale. The same product ids are in functions/src/packs.ts, the stores and RevenueCat. */
 export const PACKS = [
-  { id: 'cashtin_event_1', events: 1, fallbackPrice: '£0.99' },
+  { id: ONE_EVENT_PACK, events: 1, fallbackPrice: '£0.99' },
   { id: 'cashtin_event_5', events: 5, fallbackPrice: '£2.99' },
 ] as const;
 

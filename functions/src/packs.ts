@@ -1,9 +1,14 @@
 // The rules for event packs, kept apart from index.ts so they can be tested
 // without Firebase or RevenueCat.
 
-/** Store product id -> events it pays for. The same ids are set up in App Store Connect, Google Play and RevenueCat. */
+/**
+ * Store product id -> events it pays for. The same ids are set up in App Store Connect,
+ * Google Play and RevenueCat. Google Play's 1-event pack is cashtin_event_2, because
+ * cashtin_event_1 was deleted there and Play never reuses a product id.
+ */
 export const PACKS: Record<string, number> = {
   cashtin_event_1: 1,
+  cashtin_event_2: 1,
   cashtin_event_5: 5,
 };
 

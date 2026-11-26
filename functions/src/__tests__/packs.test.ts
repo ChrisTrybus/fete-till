@@ -33,8 +33,13 @@ describe('packPurchases', () => {
     expect(packPurchases(history, true)).toHaveLength(1);
   });
 
-  it('matches the packs on sale: 1 event and 5 events', () => {
-    expect(PACKS).toEqual({ cashtin_event_1: 1, cashtin_event_5: 5 });
+  it('matches the packs on sale: 1 event (cashtin_event_2 on Google Play) and 5 events', () => {
+    expect(PACKS).toEqual({ cashtin_event_1: 1, cashtin_event_2: 1, cashtin_event_5: 5 });
+  });
+
+  it('counts a Google Play 1-event pack as one credit', () => {
+    const list = packPurchases({ cashtin_event_2: [tx('g', { store: 'play_store' })] }, false);
+    expect(list).toEqual([expect.objectContaining({ id: 'g', product: 'cashtin_event_2', credits: 1, store: 'play_store' })]);
   });
 });
 
