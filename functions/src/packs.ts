@@ -1,11 +1,22 @@
 // The rules for event packs, kept apart from index.ts so they can be tested
 // without Firebase or RevenueCat.
 
-/** Store product id -> events it pays for. The same ids are set up in App Store Connect, Google Play and RevenueCat. */
-export const PACKS: Record<string, number> = {
-  cashtin_event_1: 1,
-  cashtin_event_5: 5,
+/**
+ * Store (as RevenueCat names it) -> product id -> events it pays for. The ids differ
+ * between the stores, so the same id can mean a different pack: on the App Store
+ * cashtin_event_2 is the 5-event pack, while on Google Play it's the 1-event pack
+ * (cashtin_event_1 was deleted there, and Play never reuses a product id).
+ * Keep in step with src/lib/packs.ts, App Store Connect, Google Play and RevenueCat.
+ */
+export const PACKS: Record<string, Record<string, number>> = {
+  app_store: { cashtin_event_1: 1, cashtin_event_2: 5 },
+  play_store: { cashtin_event_2: 1, cashtin_event_5: 5 },
 };
+
+/** The events a product pays for in a given store, or 0 if it isn't a pack there. */
+export function packCredits(store: string, product: string): number {
+  return Object.hasOwn(PACKS, store) && Object.hasOwn(PACKS[store], product) ? PACKS[store][product] : 0;
+}
 
 /** One purchase as RevenueCat's REST API (v1, GET /subscribers) lists it under non_subscriptions. */
 export type StoreTransaction = {
@@ -28,11 +39,14 @@ export function packPurchases(nonSubscriptions: unknown, allowSandbox: boolean):
   if (!nonSubscriptions || typeof nonSubscriptions !== 'object') return [];
   const out: Credit[] = [];
   for (const [product, list] of Object.entries(nonSubscriptions as Record<string, unknown>)) {
-    const credits = PACKS[product];
-    if (!credits || !Array.isArray(list)) continue;
+    if (!Array.isArray(list)) continue;
     for (const t of list as StoreTransaction[]) {
       const id = typeof t?.id === 'string' && t.id ? t.id : null;
       if (!id) continue;
+      // The same product id can be a different pack in each store, so the store decides.
+      const store = typeof t.store === 'string' ? t.store : '';
+      const credits = packCredits(store, product);
+      if (!credits) continue;
       const sandbox = t.is_sandbox === true;
       if (sandbox && !allowSandbox) continue;
       out.push({
@@ -40,7 +54,7 @@ export function packPurchases(nonSubscriptions: unknown, allowSandbox: boolean):
         product,
         credits,
         at: typeof t.purchase_date === 'string' ? t.purchase_date : '',
-        store: typeof t.store === 'string' ? t.store : '',
+        store,
         sandbox,
       });
     }

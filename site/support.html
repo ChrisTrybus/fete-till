@@ -16,6 +16,7 @@
         <a href="/">Home</a>
         <a href="/support" aria-current="page">Support</a>
         <a href="/privacy">Privacy</a>
+        <a href="/terms">Terms</a>
       </nav>
     </div>
   </header>
@@ -77,9 +78,11 @@
         <p>An organiser closes the event from the Event tab at the end of the day. All tills stop taking sales. Open Day total to see takings by till, by item, and by cash and card, then share the summary as text or PDF, or export a CSV.</p>
       </details>
 
-      <details>
+      <details id="delete-account">
         <summary>How do I delete my account?</summary>
-        <p>In the app, open Account and tap Delete account, then tap again to confirm. Any event credits left on the account are lost. To ask us to delete event data such as sales or Gift Aid declarations, email us. See our <a href="/privacy">privacy policy</a> for more.</p>
+        <p>In the app, open Account and tap Delete account, then tap again to confirm.</p>
+        <p>If you no longer have the app, email <a href="mailto:support@dynamicsdevelopment.co.uk?subject=Delete%20my%20Cash%20Tin%20account">support@dynamicsdevelopment.co.uk</a> from the address you signed up with and ask us to delete your account. We'll delete it within 30 days and confirm by email.</p>
+        <p>Deleting your account removes your sign-in, email address and any unused event credits. To ask us to delete event data such as sales or Gift Aid declarations, email us too. See our <a href="/privacy">privacy policy</a> for more.</p>
       </details>
 
       <details>
@@ -92,9 +95,14 @@
   <footer class="site-footer">
     <div class="wrap">
       <span>&copy; <span id="year">2026</span> Dynamics Development Solutions</span>
-      <span><a href="/">Home</a> · <a href="/privacy">Privacy policy</a></span>
+      <span><a href="/">Home</a> · <a href="/privacy">Privacy policy</a> · <a href="/terms">Terms</a></span>
     </div>
   </footer>
-  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+  <script>
+    document.getElementById('year').textContent = new Date().getFullYear();
+    // Open the question a link points at, such as /support#delete-account.
+    const linked = location.hash && document.querySelector('details' + location.hash);
+    if (linked) linked.open = true;
+  </script>
 </body>
 </html>

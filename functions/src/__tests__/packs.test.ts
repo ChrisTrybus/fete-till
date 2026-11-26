@@ -12,7 +12,7 @@ describe('packPurchases', () => {
   });
 
   it('counts each pack purchase once, by RevenueCat’s transaction id, with its events', () => {
-    const list = packPurchases({ cashtin_event_1: [tx('a')], cashtin_event_5: [tx('b'), tx('c')] }, false);
+    const list = packPurchases({ cashtin_event_1: [tx('a')], cashtin_event_2: [tx('b'), tx('c')] }, false);
     expect(list.map((c) => [c.id, c.credits])).toEqual([
       ['a', 1],
       ['b', 5],
@@ -21,20 +21,37 @@ describe('packPurchases', () => {
     expect(list[0]).toMatchObject({ product: 'cashtin_event_1', store: 'app_store', sandbox: false, at: '2026-11-01T10:00:00Z' });
   });
 
-  it('ignores other products and anything malformed', () => {
+  it('reads cashtin_event_2 by store: 5 events on the App Store, 1 on Google Play', () => {
+    const list = packPurchases({ cashtin_event_2: [tx('ios'), tx('android', { store: 'play_store' })] }, false);
+    expect(list.map((c) => [c.id, c.store, c.credits])).toEqual([
+      ['ios', 'app_store', 5],
+      ['android', 'play_store', 1],
+    ]);
+    expect(packPurchases({ cashtin_event_5: [tx('p', { store: 'play_store' })] }, false)).toEqual([
+      expect.objectContaining({ id: 'p', credits: 5 }),
+    ]);
+  });
+
+  it('ignores other products, unknown stores and anything malformed', () => {
     expect(packPurchases({ some_other_thing: [tx('x')], cashtin_event_1: 'nonsense' }, false)).toEqual([]);
     expect(packPurchases({ cashtin_event_1: [{}, null, tx('')] }, false)).toEqual([]);
+    // Each id only counts in the store that sells it.
+    expect(packPurchases({ cashtin_event_5: [tx('a')], cashtin_event_1: [tx('b', { store: 'play_store' })] }, false)).toEqual([]);
+    expect(packPurchases({ cashtin_event_1: [tx('s', { store: 'stripe' })], constructor: [tx('c')] }, false)).toEqual([]);
     expect(packPurchases(undefined, false)).toEqual([]);
   });
 
   it('only counts test purchases when told to', () => {
-    const history = { cashtin_event_5: [tx('t', { is_sandbox: true })] };
+    const history = { cashtin_event_2: [tx('t', { is_sandbox: true })] };
     expect(packPurchases(history, false)).toEqual([]);
     expect(packPurchases(history, true)).toHaveLength(1);
   });
 
-  it('matches the packs on sale: 1 event and 5 events', () => {
-    expect(PACKS).toEqual({ cashtin_event_1: 1, cashtin_event_5: 5 });
+  it('matches the packs on sale in each store', () => {
+    expect(PACKS).toEqual({
+      app_store: { cashtin_event_1: 1, cashtin_event_2: 5 },
+      play_store: { cashtin_event_2: 1, cashtin_event_5: 5 },
+    });
   });
 });
 
