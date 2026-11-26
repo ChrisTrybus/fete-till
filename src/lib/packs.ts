@@ -15,15 +15,21 @@ import { buyProduct, purchasesAvailable, storePrices } from './store-purchases';
 export { purchasesAvailable };
 
 /**
- * The 1-event pack's product id. On Google Play it's cashtin_event_2: cashtin_event_1
- * was deleted there, and Play never lets a deleted product id be used again.
+ * The packs' product ids, which differ by store:
+ *   App Store:   1 event = cashtin_event_1, 5 events = cashtin_event_2
+ *   Google Play: 1 event = cashtin_event_2, 5 events = cashtin_event_5
+ * (cashtin_event_1 was deleted on Play, and Play never reuses a product id.)
+ * Keep in step with functions/src/packs.ts, both stores and RevenueCat.
  */
-const ONE_EVENT_PACK = Platform.OS === 'android' ? 'cashtin_event_2' : 'cashtin_event_1';
+const IDS =
+  Platform.OS === 'android'
+    ? ({ one: 'cashtin_event_2', five: 'cashtin_event_5' } as const)
+    : ({ one: 'cashtin_event_1', five: 'cashtin_event_2' } as const);
 
-/** The packs on sale. The same product ids are in functions/src/packs.ts, the stores and RevenueCat. */
+/** The packs on sale on this phone's store. */
 export const PACKS = [
-  { id: ONE_EVENT_PACK, events: 1, fallbackPrice: '£0.99' },
-  { id: 'cashtin_event_5', events: 5, fallbackPrice: '£2.99' },
+  { id: IDS.one, events: 1, fallbackPrice: '£0.99' },
+  { id: IDS.five, events: 5, fallbackPrice: '£2.99' },
 ] as const;
 
 export type PackId = (typeof PACKS)[number]['id'];

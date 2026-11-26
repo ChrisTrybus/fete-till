@@ -29,6 +29,29 @@ beforeEach(() => {
   mockServerCall.mockResolvedValue({ data: { credits: 5, unlocked: true, added: 5 } });
 });
 
+describe('PACKS', () => {
+  const packsOn = (os: 'ios' | 'android') => {
+    let packs: readonly { id: string; events: number }[] = [];
+    jest.isolateModules(() => {
+      jest.doMock('react-native', () => ({ Platform: { OS: os } }));
+      packs = require('../packs').PACKS;
+    });
+    jest.dontMock('react-native');
+    return packs.map((p) => [p.id, p.events]);
+  };
+
+  it('uses each store’s own product ids', () => {
+    expect(packsOn('ios')).toEqual([
+      ['cashtin_event_1', 1],
+      ['cashtin_event_2', 5],
+    ]);
+    expect(packsOn('android')).toEqual([
+      ['cashtin_event_2', 1],
+      ['cashtin_event_5', 5],
+    ]);
+  });
+});
+
 describe('readCredits', () => {
   it('reads what the server stored, treating anything odd as none', () => {
     expect(readCredits({ credits: 4, unlocked: true })).toEqual({ credits: 4, unlocked: true });
